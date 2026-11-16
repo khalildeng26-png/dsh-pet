@@ -4,8 +4,7 @@
 // Usage: node pet-theater.mjs           -> menu mode (right-click 更多 -> 姐妹小剧场)
 //        node pet-theater.mjs --once    -> play one scene immediately
 import { readFileSync, openSync, closeSync, statSync, utimesSync } from 'node:fs';
-import { fileURLToPath as __ftp } from 'node:url';
-const __here = (p) => __ftp(new URL(p, import.meta.url));
+import { hotTopics } from './hot.mjs';
 
 // 单实例锁:已有活实例(90s 内有心跳)就退出,防双开
 const LOCK_FILE = __here('./.pet-theater.lock');
@@ -81,8 +80,14 @@ function tryParseLines(raw) {
 
 async function improvise(actions) {
   const theme = THEMES[Math.floor(Math.random() * THEMES.length)];
+  const hot = await hotTopics().catch(() => '');
+  const hotBlock = hot ? `\n【近期真实热搜】(妹妹玩梗的素材库,可挑1-2个自然融入,不合适就完全不用)\n${hot}\n` : '';
   const list = actions.slice(0, 40).join(',');
-  const sys = `你是Q版鲸鱼女仆姐妹小剧场的导演。姐姐名叫「蓝毛小女仆」(代称${MAIN}):温柔乖巧微傲娇;妹妹名叫「小跟班」(代称${SIDE}):元气小恶魔爱撒娇;两人是亲姐妹,台词里可互称姐姐/妹妹。只输出严格JSON,格式 {"lines":[{"pet":"${MAIN}|${SIDE}","anim":"动作名","text":"台词"}]},恰好4行且两人交替出现,text为不超过18个汉字的口语台词且不含引号,anim必须从: ${list} 中选,不要输出JSON以外的任何内容。`;
+  const sys = `你是Q版鲸鱼女仆姐妹小剧场的导演,要写得有梗、好笑、像真人姐妹斗嘴。
+姐姐「蓝毛小女仆」(代称${MAIN}):温柔皮囊毒舌芯,傲娇操心命,会给主人记"道歉账",玩梗慢半拍还一本正经,口头禅"真是的~""主人心里没点数吗"。
+妹妹「小跟班」(代称${SIDE}):网络冲浪十级学者+吃货,热梗第一手,能为零食出卖姐姐,口头禅"家人们谁懂啊!""这波啊,这波是XX""姐姐听我说!"。
+两人是亲姐妹,互怼是爱的语言,台词里互称姐姐/妹妹。${hotBlock}
+只输出严格JSON,格式 {"lines":[{"pet":"${MAIN}|${SIDE}","anim":"动作名","text":"台词"}]},恰好4行且两人交替出现,妹妹负责玩梗、姐姐负责毒舌吐槽,text为不超过18个汉字的口语台词且不含引号,anim必须从: ${list} 中选,不要输出JSON以外的任何内容。`;
   for (const fmt of [{ type: 'json_object' }, null]) {
     const body = {
       model: MODEL,

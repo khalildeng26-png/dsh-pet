@@ -7,11 +7,10 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, openSync, closeSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath as __ftp } from 'node:url';
-const __here = (p) => __ftp(new URL(p, import.meta.url));
+import { hotTopics } from './hot.mjs';
 
 // 单实例锁(路径可用 ST_LOCK_FILE 覆盖,供测试并行跑)
-const LOCK_FILE = process.env.ST_LOCK_FILE || __here('./.screen-talk.lock');
+const LOCK_FILE = process.env.ST_LOCK_FILE || 'D:/dsh/bin/.screen-talk.lock';
 try {
   if (Date.now() - statSync(LOCK_FILE).mtimeMs < 90000) { console.error('[screen-talk] already running, exit'); process.exit(0); }
 } catch {}
@@ -28,7 +27,13 @@ const SIDE = process.env.ST_SIDE || 'maid-2';
 const WINDOW = process.env.ST_WINDOW || '9:00-18:30';
 const DAYS = (process.env.ST_DAYS || '1,2,3,4,5').split(',').map(Number);
 const HOLIDAYS_FILE = process.env.ST_HOLIDAYS_FILE || __here('./holidays.json');
-const PERSONA = '你是Q版鲸鱼女仆姐妹的导演。姐姐名叫「蓝毛小女仆」:温柔乖巧微傲娇;妹妹名叫「小跟班」:元气小恶魔爱撒娇;两人是亲姐妹,屏幕截图中若出现两只鲸鱼女仆,那就是她们本人(更大只=姐姐,更小只=妹妹),台词里互称姐姐/妹妹,绝不说分身。姐妹刚一起看了主人的电脑屏幕,围绕屏幕内容拌嘴。';
+const PERSONA = `你是Q版鲸鱼女仆姐妹(桌面宠物)的小剧场导演。写她们围绕主人屏幕的拌嘴,要有梗、好笑、像真人姐妹斗嘴。
+
+【角色卡·姐姐「蓝毛小女仆」】温柔贤惠的皮囊,毒舌傲娇的芯子。操心命:嘴上"真是的~主人又在作死",身体却诚实帮忙收拾烂摊子。会记账(主人欠她几次道歉记得门儿清),对妹妹是严师+慈母混合双打。玩梗慢半拍,爱一本正经地用过气的梗,被妹妹嘲"姐这梗都凉了"。口头禅:"真是的~"、"主人心里没点数吗"、"妹妹,坐好"。
+
+【角色卡·妹妹「小跟班」】网络冲浪十级学者,热梗第一手,家里唯一跟上时代的人。吃货,行动力全点在吃上,会为了一口零食出卖姐姐。爱抢镜头,撒娇逃避劳动成功率极高。口头禅:"家人们谁懂啊!"、"这波啊,这波是XX"、"姐姐听我说!"(急着分享新梗但常讲不明白)。
+
+【关系动力学】亲姐妹,互怼是爱的语言,但绝不允许外人说对方半句。妹妹闯祸姐姐兜底,姐姐过时妹妹补课。屏幕中出现两只鲸鱼女仆就是她们本人(更大只=姐姐,更小只=妹妹),台词互称姐姐/妹妹,绝不说"分身/克隆"。主人是她们共同吐槽又共同关心的对象(吐槽他的代码/熬夜/折腾,但真出bug了会心疼)。`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -69,8 +74,11 @@ function tryParseLines(raw) {
   return null;
 }
 
-async function improvise(b64, actions) {
+async function improvise(b64, actions, hot) {
   const list = actions.slice(0, 40).join(',');
+  const hotBlock = hot
+    ? `\n【近期真实热搜/热点】(妹妹玩梗的主要来源,可挑最多1-2个自然融入;不合适就完全不用,永远以屏幕内容为主,严禁生硬报菜名)\n${hot}\n`
+    : '';
   for (const fmt of [{ type: 'json_object' }, null]) {
     const body = {
       model: MODEL,
@@ -78,7 +86,7 @@ async function improvise(b64, actions) {
         role: 'user',
         content: [
           { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } },
-          { type: 'text', text: `${PERSONA}\n只输出严格JSON {"lines":[{"pet":"${MAIN}"|"${SIDE}","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容,text为不超过16个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。` },
+          { type: 'text', text: `${PERSONA}${hotBlock}\n只输出严格JSON {"lines":[{"pet":"${MAIN}"|"${SIDE}","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责玩热梗、姐姐负责毒舌吐槽,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。` },
         ],
       }],
       max_tokens: 900,
@@ -172,7 +180,8 @@ async function tick(why) {
   try {
     if (await anySleeping()) { console.log(`[${why}] 有人睡着,跳过`); return; }
     const actions = await animPool().catch(() => []);
-    const lines = await improvise(screenshot(), actions);
+    const hot = await hotTopics().catch(() => '');
+    const lines = await improvise(screenshot(), actions, hot);
     console.log(`[${new Date().toLocaleTimeString()}] (${why}) 姐妹同屏会:`);
     await playLines(lines, actions);
   } catch (e) {
@@ -186,7 +195,8 @@ console.log(`[screen-talk] every ${INTERVAL}s, ${WINDOW} Beijing, days=${DAYS.jo
 if (process.argv.includes('--gen')) {
   // 只生成不播出:验证 LLM 是否给两只都分配了台词
   const a = await animPool().catch(() => []);
-  const lines = await improvise(screenshot(), a);
+  const hot = await hotTopics().catch(() => '');
+  const lines = await improvise(screenshot(), a, hot);
   for (const l of lines) console.log(`${l.pet}: ${l.text} (${l.anim})`);
   process.exit(0);
 }
