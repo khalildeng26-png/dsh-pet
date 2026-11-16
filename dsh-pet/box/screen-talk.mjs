@@ -106,8 +106,8 @@ async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') 
     : '';
   const styleBlock = style ? `\n【本场喜剧路线】${style}(贴合就多用,不贴合就丢掉,别硬演)\n` : '';
   const directive = mode === '热点'
-    ? `\n只输出严格JSON {"lines":[{"pet":"${MAIN}"|"${SIDE}","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口。本场是【热搜脱口秀】:姐妹像解说搭档聊今天热搜里的1-2条最有梗的(可意见相左吵起来),妹妹兴奋安利玩梗、姐姐毒舌点评泼冷水,像真人聊八卦一样自然,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`
-    : `\n只输出严格JSON {"lines":[{"pet":"${MAIN}"|"${SIDE}","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责玩热梗、姐姐负责毒舌吐槽,梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`;
+    ? `\n只输出严格JSON {"lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐毒舌冷静·真是的~,妹妹元气玩梗·家人们谁懂啊,严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口。本场是【热搜脱口秀】:姐妹像解说搭档聊今天热搜里的1-2条最有梗的(可意见相左吵起来),妹妹兴奋安利玩梗、姐姐毒舌点评泼冷水,像真人聊八卦一样自然,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`
+    : `\n只输出严格JSON {"lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐毒舌冷静·真是的~,妹妹元气玩梗·家人们谁懂啊,严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责玩热梗、姐姐负责毒舌吐槽,梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`;
   const contentParts = [];
   if (b64) contentParts.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } });
   contentParts.push({ type: 'text', text: `${PERSONA}${hotBlock}${recentBlock}${styleBlock}${directive}` });
@@ -203,7 +203,8 @@ async function playLines(lines, actions) {
   // 微锁模式:每句只在写入气泡的一瞬拿锁(~百毫秒),写完即放——气泡自带寿命自己飘,
   // 期间宠物完全自由(锁的语义是「占用期完全静止」,整场长锁会把她们定格成"卡住")。
   for (const l of lines) {
-    const pet = l.pet === SIDE ? SIDE : MAIN;
+    const pet = (l.pet === SIDE || l.pet === '妹妹') ? SIDE : (l.pet === MAIN || l.pet === '姐姐') ? MAIN : null;
+    if (!pet) continue; // 无法识别的填值跳过,绝不归错人
     const sf = await surfaceOf(pet);
     const lk = await j('POST', `/lock?pet=${pet}&surface=${sf}`, {});
     const id = lk?.lockId;
