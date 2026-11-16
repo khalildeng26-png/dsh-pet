@@ -48,6 +48,8 @@ const { runSmokeCheck } = require('./main/smoke.js');
 const { createDpi } = require('./main/dpi.js');
 const { createBridge } = require('./main/bridge.js');
 const { createTray } = require('./main/tray.js');
+const { createChatWindow } = require('./main/chat-window.js');
+const { startAmbientCollision } = require('./main/ambient-collision.js');
 const { createWindows } = require('./main/windows.js');
 const { registerIpc } = require('./main/ipc.js');
 const { createDisplaySync } = require('./main/displays.js');
@@ -236,7 +238,11 @@ const tray = createTray({
   petRoute: PET_ROUTE,
   platform: TRAY_PLATFORM,
   helperDir: __dirname,
+  openChat: () => chatWindow.toggle('main'),
 });
+
+/** 聊天窗口：托盘入口的独立深色竖窗,页面经 bridge 直连宿主 /chat(不依赖 DSH 网页端)。 */
+const chatWindow = createChatWindow({ BrowserWindow, helperDir: __dirname, isBridge: BRIDGE, origin: ORIGIN });
 
 /**
  * 应用模式的重建钩子：同进程里没有「重启 helper 进程」这条路，宿主改完显示位置会调它——
@@ -292,6 +298,39 @@ app.whenReady().then(() => {
 
   linuxPointer?.start();
   petWindows.create();
+
+  // 常驻互撞兜底:官方结算只挂飞行帧,静止/漫游叠在一起没人管——主进程扫站场给小的那只发 pet:hit。
+  // 障碍物:聊天窗可见时,压在窗上的宠物也会被推开(见 chat-window 的 obstacleBounds)。
+  startAmbientCollision({ petWindows, obstacle: () => chatWindow.obstacleBounds() });
+
+  // [khalil] 调试探针:http://127.0.0.1:7341/debug 返回每个桌面窗口认的 petId 与渲染端 __dshPetDebug 快照。
+  // 只听本机;失败不影响任何功能。
+  try {
+    const dbg = require('node:http').createServer((req, res) => {
+      if (!req.url.startsWith('/debug')) { res.writeHead(404).end(); return; }
+      Promise.all(
+        [...petWindows.state.windows.entries()].map(async ([petId, win]) => {
+          if (!win || win.isDestroyed()) return { petId, destroyed: true };
+          try {
+            const raw = await win.webContents.executeJavaScript(
+              'JSON.stringify(window.__dshPetDebug || {})', true,
+            );
+            return { petId, title: win.getTitle(), debug: JSON.parse(raw) };
+          } catch (e) {
+            return { petId, error: String(e && e.message ? e.message : e) };
+          }
+        }),
+      ).then((rows) => {
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' });
+        res.end(JSON.stringify(rows, null, 1));
+      }).catch(() => { res.writeHead(500).end(); });
+    });
+    dbg.listen(7341, '127.0.0.1');
+    dbg.unref?.();
+    console.error('[dsh-pet-desktop-helper] debug probe on http://127.0.0.1:7341/debug');
+  } catch (e) {
+    console.error('[dsh-pet-desktop-helper] debug probe failed:', String(e));
+  }
 
   // 合盖/唤醒是任务栏按钮重建最集中的时刻：resume / unlock-screen 后把每只宠物重新摘一次。
   // powerMonitor 只能在 ready 之后使用，所以挂在这里而不是模块顶层。

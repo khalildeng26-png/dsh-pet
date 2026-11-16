@@ -36,6 +36,7 @@ function createTray({
   petRoute,
   platform,
   helperDir,
+  openChat,
 }) {
   const isDesktopDisplay = (display) => display === 'desktop' || display === 'both';
 
@@ -124,6 +125,7 @@ function createTray({
         checked: isDesktopDisplay(pet.display),
         click: () => traySetPetDisplay(pet.id, toggleDisplay(pet.display)),
       })),
+      ...(openChat ? [{ type: 'separator' }, { label: '聊天窗口', click: () => openChat() }] : []),
       ...(canQuit ? [{ type: 'separator' }, { label: '退出', click: quitApp }] : []),
     ]);
   }

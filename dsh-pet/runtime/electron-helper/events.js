@@ -190,11 +190,13 @@ PetSprite.prototype.showWhisper = function showWhisper(text, image, url, duratio
   if (anim !== false) {
     const pool = this.animations.events?.whisper;
     if (!pool || pool.length === 0) {
-      console.error('[dsh-pet] 配置缺少 animations.events.whisper，无法播放碎碎念动画');
-      return;
+      // [khalil] 缺 whisper 池只降级为「不联动动画」,气泡照弹——原版在这里整个 return,
+      // 导致缺池的宠物(如 desktop-only 的第二只)说话永远没有气泡、只有一条看不见的 console.error。
+      console.error('[dsh-pet] 配置缺少 animations.events.whisper，本条不联动动画（气泡照常显示）');
+    } else {
+      // 整池随机抽 1 槽（避开当前正播动画，避免连续重复）；槽位若为数组候选再档内随机（与浏览器一致）
+      name = S.pickSlot(S.pick(pool, this.anim), this.anim);
     }
-    // 整池随机抽 1 槽（避开当前正播动画，避免连续重复）；槽位若为数组候选再档内随机（与浏览器一致）
-    name = S.pickSlot(S.pick(pool, this.anim), this.anim);
   }
   console.log(
     '[dsh-pet] ' +
@@ -360,6 +362,14 @@ function applyEnvLeaf(leaf) {
 function applySayLeaf(petId, leaf) {
   const said = S.readSay(leaf);
   if (!said) return;
+  // [khalil] 探针:记录本窗口收到了谁的 say、是否命中本窗宠物(/debug 可读)
+  window.__dshPetDebug = window.__dshPetDebug || {};
+  window.__dshPetDebug.lastSay = {
+    from: petId,
+    at: Date.now(),
+    mine: sprites.some((s) => s.pet.id === petId),
+    text: String(said.text || '').slice(0, 30),
+  };
   for (const s of sprites) {
     if (s.pet.id !== petId) continue;
     if (said.kind === 'clear') {

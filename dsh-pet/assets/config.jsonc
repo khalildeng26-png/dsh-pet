@@ -83,7 +83,7 @@
   // ===================== 语音播报（全局默认；种类文件 pet/<名>-config.json 顶层可覆盖） =====================
   // 手动播报：右键菜单、斜杠命令触发的碎碎念，以及对话回复，是否用语音念出来。默认关闭——不是所有人都希望桌宠出声。
   // 只影响「说不说」：气泡、记忆与通知都不受影响。对话面板的喇叭按钮是单句点播，随时可点。
-  "voiceEnabled": false,
+  "voiceEnabled": true,
   // 用哪个音色念：必须是 /voice/voices 里的 id（四个中文音色的白名单）。
   // 写错或留空即配置错误 → 告警并回落到默认 zh-CN-XiaoyiNeural（晓伊，女声·活泼）。
   "voiceName": "zh-CN-XiaoyiNeural",
@@ -248,11 +248,13 @@
       "name": "蓝毛小女仆",
       "id": "main",
       "size": 462,
+      // [khalil] 出厂即姐妹双宠:姐姐人设 + 关碎碎念(说话交给姐妹同屏会,避免姐姐周期独白)
+      "whisperPrompt": "你是主人桌面上的Q版蓝发小女仆,名叫「蓝毛小女仆」,是姐姐,温柔乖巧带点俏皮。你有个亲妹妹叫「小跟班」,是另一只更小只的鲸鱼女仆,常在屏幕另一角——她是妹妹本人,不是你的分身或克隆。说话短短一句。",
       "balanceEnabled": true,
       // 碎碎念默认开启：每次生成都会调用当前对话的模型。本地 LLM 单并发时，
       // 后台碎碎念会顶掉正在跑的任务的 KV cache（与 DSH 多子代理同因）。
-      // 不需要碎碎念的宠物改为 false（设置页也可开关）。
-      "whisperEnabled": true,
+      // 不需要碎碎念的宠物改为 false（设置页也可开关）。[khalil] 出厂关闭:说话统一走姐妹同屏会。
+      "whisperEnabled": false,
       // 工作状态联动默认开启：监听 DSH 会话事件（工具调用等），按
       // animations.events.workStatus 数组切档位动画 + 气泡（仅监听，不调用模型）。
       "workStatusEnabled": true,
@@ -269,8 +271,23 @@
         "marginX": 24,
         "marginY": 100
       }
-      // 想让这只宠物有自己的性格，就取消下面这行的注释（留空/不写 = 跟随文件顶层的 whisperPrompt）
-      // "whisperPrompt": "你是主人桌面上的猫娘，说话简短、爱吐槽，20 字以内。"
+    },
+    {
+      // [khalil] 出厂妹妹:小跟班(右下角,安静型——不开余额不碎碎念,说话走姐妹同屏会/小剧场)
+      "name": "小跟班",
+      "id": "maid-2",
+      "size": 340,
+      "whisperPrompt": "你是主人的Q版鲸鱼女仆,名叫「小跟班」,是妹妹,元气满满爱撒娇带点小恶魔。你姐姐叫「蓝毛小女仆」,是那只更大只的鲸鱼女仆,常在屏幕另一角——她是姐姐本人,不是你的分身或克隆。说话活泼俏皮,短短一句。",
+      "balanceEnabled": false,
+      "whisperEnabled": false,
+      "workStatusEnabled": true,
+      "fixedEnabled": false,
+      "display": "desktop",
+      "position": {
+        "corner": "bottom-right",
+        "marginX": 24,
+        "marginY": 60
+      }
     }
   ],
 

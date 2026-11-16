@@ -55,8 +55,9 @@ function resolveElectronDist() {
 }
 
 const target = process.argv[2] ?? 'dir';
-if (target !== 'dir') {
-  console.error(`[dist] 未知目标：${target}（只出解包目录，直接运行 node scripts/dist.mjs）`);
+// [khalil] 允许 nsis:小白分发的安装器目标(yml 的 nsis 段提供向导/快捷方式配置)
+if (target !== 'dir' && target !== 'nsis') {
+  console.error(`[dist] 未知目标：${target}（可用：dir / nsis）`);
   process.exit(2);
 }
 

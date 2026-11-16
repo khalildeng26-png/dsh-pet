@@ -6,6 +6,8 @@
  * @module dsh-pet/src/app/main
  */
 
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,9 +44,16 @@ interface ElectronApp {
   on(event: 'second-instance', listener: () => void): void;
   on(event: 'will-quit', listener: () => void): void;
 }
-const { app, session } = createRequire(import.meta.url)('electron') as {
+/** 引导窗只要这两个成员；完整类型交给 Electron 自带声明。 */
+interface ElectronBrowserWindowLike {
+  loadURL(url: string): Promise<void>;
+  on(event: 'closed', listener: () => void): void;
+}
+type BrowserWindowCtor = new (options: Record<string, unknown>) => ElectronBrowserWindowLike;
+const { app, session, BrowserWindow } = createRequire(import.meta.url)('electron') as {
   app: ElectronApp;
   session: { defaultSession: DesktopSession };
+  BrowserWindow: BrowserWindowCtor;
 };
 
 /** 包根目录：与 helper-process.ts 的 packageRoot 同一口径（模块所在目录的上一级） */
@@ -159,8 +168,25 @@ async function boot(): Promise<void> {
     delete process.env.DSH_PET_APP_TOKEN;
   }
 
+  // [khalil] box 服务:捆绑的姐妹同屏会/手动看屏/小剧场脚本随包分发,
+  // 用本进程的运行时以纯 Node 模式拉起(ELECTRON_RUN_AS_NODE=1),宠物 API 指向本机服务。
+  const boxChildren = spawnBoxServices(origin);
+  // 首次运行未配置 key:弹引导窗直达 AI 设置页(带令牌),填完保存即可,无需重启。
+  if (!readApiKey()) {
+    void app.whenReady().then(() => {
+      const win = new BrowserWindow({
+        width: 760,
+        height: 680,
+        title: '鲸鱼姐妹 · 先配置 AI',
+        autoHideMenuBar: true,
+      });
+      void win.loadURL(security.authenticatedUrl(origin));
+    });
+  }
+
   app.on('second-instance', () => log('已有一个实例在运行，忽略本次启动'));
   app.on('will-quit', () => {
+    for (const child of boxChildren) child.kill();
     // 退出前把最后一批日志刷出去（定时器最多 1s，这里显式补一次）
     void logger.flush();
     logger.dispose();
@@ -168,6 +194,64 @@ async function boot(): Promise<void> {
     void context.dispose().catch(() => undefined);
     void server.close().catch(() => undefined);
   });
+}
+
+/**
+ * [khalil] box 脚本目录：打包后落在 resources/box（asar 外，spawn 的脚本必须可读文件），
+ * 开发态在包根 box/。找不到（比如上游裁剪）就静默不拉起。
+ */
+function boxDir(): string {
+  const candidates = [resolve(packageRoot, '..', 'box'), join(packageRoot, 'box')];
+  return candidates.find((p) => existsSync(join(p, 'screen-talk.mjs'))) ?? '';
+}
+
+/** [khalil] 读独立 AI 设置里的 key：未配置返回空串（首启引导与 box 服务的 LLM 都靠它）。 */
+function readApiKey(): string {
+  try {
+    const raw = JSON.parse(readFileSync(join(dshHomeDir(), 'dsh-pet', 'standalone-ai.json'), 'utf8')) as {
+      apiKey?: unknown;
+    };
+    return typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+/** [khalil] 拉起三个 box 服务；key 之后在设置页补填也能用（脚本每次调用现读 env，由本函数注入）。 */
+function spawnBoxServices(origin: string): ChildProcess[] {
+  const dir = boxDir();
+  log(`box 目录判定：${dir || '（未找到，不拉起）'}；DSH_PET_BOX=${process.env.DSH_PET_BOX ?? '未设'}`);
+  if (!dir || process.env.DSH_PET_BOX === '0') return [];
+  const key = readApiKey();
+  log(`box key 状态：${key ? '已配置' : '未配置（等待设置页填写）'}`);
+  try {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      PET_API: `${origin}${ROUTE_SEGMENT}`,
+      ST_KEY: key,
+      LOOK_KEY: key,
+      TH_KEY: key,
+    };
+    const children: ChildProcess[] = [];
+    for (const script of ['screen-talk.mjs', 'look-screen.mjs', 'pet-theater.mjs']) {
+      const child = spawn(process.execPath, [join(dir, script)], {
+        env,
+        stdio: ['ignore', 'ignore', 'pipe'],
+        windowsHide: true,
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        log(`box/${script} ${String(chunk).trim()}`);
+      });
+      child.on('exit', (code) => log(`box/${script} 退出 code=${code}`));
+      children.push(child);
+    }
+    log(`box 服务已拉起（${dir}）共 ${children.length} 个`);
+    return children;
+  } catch (error) {
+    log(`box 拉起失败：${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  }
 }
 
 /**
