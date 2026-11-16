@@ -29,6 +29,8 @@ const SIDE = process.env.ST_SIDE || 'maid-2';
 const WINDOW = process.env.ST_WINDOW || '9:00-18:30';
 const DAYS = (process.env.ST_DAYS || '1,2,3,4,5').split(',').map(Number);
 const HOLIDAYS_FILE = process.env.ST_HOLIDAYS_FILE || __here('./holidays.json');
+const HOT_MODE_RATIO = Number(process.env.ST_HOT_RATIO ?? 0.5); // B·热搜专场出现概率(0=永远看屏幕,1=永远聊热点)
+
 const PERSONA = `你是Q版鲸鱼女仆姐妹(桌面宠物)的小剧场导演。写她们围绕主人屏幕的拌嘴,要有梗、好笑、像真人姐妹斗嘴。
 
 【角色卡·姐姐「蓝毛小女仆」】温柔贤惠的皮囊,毒舌傲娇的芯子。操心命:嘴上"真是的~主人又在作死",身体却诚实帮忙收拾烂摊子。会记账(主人欠她几次道歉记得门儿清),对妹妹是严师+慈母混合双打。玩梗慢半拍,爱一本正经地用过气的梗,被妹妹嘲"姐这梗都凉了"。口头禅:"真是的~"、"主人心里没点数吗"、"妹妹,坐好"。
@@ -93,7 +95,7 @@ function tryParseLines(raw) {
   return null;
 }
 
-async function improvise(b64, actions, hot, recentUsed, style) {
+async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') {
   const list = actions.slice(0, 40).join(',');
   const hotBlock = hot
     ? `\n【近期真实热搜/热点】(妹妹玩梗的主要来源,可挑最多1-2个自然融入;不合适就完全不用,永远以屏幕内容为主,严禁生硬报菜名)\n${hot}\n`
@@ -103,13 +105,13 @@ async function improvise(b64, actions, hot, recentUsed, style) {
     ? `\n【她们最近已说过的台词】(严禁重复、严禁换个说法再讲一遍、也别再玩其中出现过的梗)\n${recent.map((t) => '- ' + t).join('\n')}\n`
     : '';
   const styleBlock = style ? `\n【本场喜剧路线】${style}(贴合就多用,不贴合就丢掉,别硬演)\n` : '';
-  const baseMessages = [{
-    role: 'user',
-    content: [
-      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } },
-      { type: 'text', text: `${PERSONA}${hotBlock}${recentBlock}${styleBlock}\n只输出严格JSON {"lines":[{"pet":"${MAIN}"|"${SIDE}","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责玩热梗、姐姐负责毒舌吐槽,梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。` },
-    ],
-  }];
+  const directive = mode === '热点'
+    ? `\n只输出严格JSON {"lines":[{"pet":"${MAIN}"|"${SIDE}","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口。本场是【热搜脱口秀】:姐妹像解说搭档聊今天热搜里的1-2条最有梗的(可意见相左吵起来),妹妹兴奋安利玩梗、姐姐毒舌点评泼冷水,像真人聊八卦一样自然,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`
+    : `\n只输出严格JSON {"lines":[{"pet":"${MAIN}"|"${SIDE}","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责玩热梗、姐姐负责毒舌吐槽,梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`;
+  const contentParts = [];
+  if (b64) contentParts.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } });
+  contentParts.push({ type: 'text', text: `${PERSONA}${hotBlock}${recentBlock}${styleBlock}${directive}` });
+  const baseMessages = [{ role: 'user', content: contentParts }];
 
   async function send(body) {
     const r = await fetch(BASE.replace(/\/$/, '') + '/chat/completions', {
@@ -253,8 +255,12 @@ async function tick(why) {
     const actions = await animPool().catch(() => []);
     const hot = await hotTopics().catch(() => '');
     const style = STYLES[Math.floor(Math.random() * STYLES.length)];
-    const lines = await improvise(screenshot(), actions, hot, loadRecentUsed(), style);
-    console.log(`[${new Date().toLocaleTimeString()}] (${why}) [路线:${style}] 姐妹同屏会:`);
+    // 模式轮盘:A·看屏幕(截图+热梗佐料) / B·热搜专场(纯热点脱口秀)
+    const modeB = hot && Math.random() < HOT_MODE_RATIO;
+    const mode = modeB ? '热点' : '屏幕';
+    const b64 = modeB ? null : screenshot();
+    const lines = await improvise(b64, actions, hot, loadRecentUsed(), style, mode);
+    console.log(`[${new Date().toLocaleTimeString()}] (${why}·${mode}) [路线:${style}] 姐妹同屏会:`);
     await playLines(lines, actions);
     recordUsed(lines);
   } catch (e) {
@@ -266,11 +272,18 @@ async function tick(why) {
 
 console.log(`[screen-talk] every ${INTERVAL}s, ${WINDOW} Beijing, days=${DAYS.join(',')}, CN-holidays excluded; model=${MODEL} key=${KEY ? 'set' : 'MISSING'}`);
 if (process.argv.includes('--gen')) {
-  // 只生成不播出:验证 LLM 是否给两只都分配了台词
+  // 只生成不播出:走完整 tick 逻辑(模式轮盘+防重复+风格),但不锁宠不广播
+  if (await anySleeping()) { console.log('有人睡着,跳过'); process.exit(0); }
   const a = await animPool().catch(() => []);
   const hot = await hotTopics().catch(() => '');
-  const lines = await improvise(screenshot(), a, hot);
+  const style = STYLES[Math.floor(Math.random() * STYLES.length)];
+  const modeB = hot && Math.random() < HOT_MODE_RATIO;
+  const mode = modeB ? '热点' : '屏幕';
+  const b64 = modeB ? null : screenshot();
+  const lines = await improvise(b64, a, hot, loadRecentUsed(), style, mode);
+  console.log(`[模式:${mode}] [路线:${style}]`);
   for (const l of lines) console.log(`${l.pet}: ${l.text} (${l.anim})`);
+  recordUsed(lines);
   process.exit(0);
 }
 if (process.argv.includes('--once')) {
