@@ -128,8 +128,6 @@ function createTray({
         click: () => traySetPetDisplay(pet.id, toggleDisplay(pet.display)),
       })),
       ...(openChat ? [{ type: 'separator' }, { label: '聊天窗口', click: () => openChat() }] : []),
-      ...(perch ? [{ label: '趴窗口·跟随', click: () => perch() }] : []),
-      ...(pushNearby ? [{ label: '推一把旁边的窗口', click: () => pushNearby() }] : []),
       ...(canQuit ? [{ type: 'separator' }, { label: '退出', click: quitApp }] : []),
     ]);
   }

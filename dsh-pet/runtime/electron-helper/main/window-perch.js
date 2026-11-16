@@ -11,7 +11,7 @@ const path = require('node:path');
 /**
  * @param {{ petWindows: object, helperDir: string, platform: string }} deps
  */
-function createWindowPerch({ petWindows, helperDir, platform }) {
+function createWindowPerch({ petWindows, helperDir, platform, origin, petRoute }) {
   if (platform !== 'win32') return { perch: () => 'unsupported', pushNearby: () => 'unsupported', isPerched: () => false };
   const ps1 = path.join(helperDir, 'main', 'win-helpers.ps1');
 
@@ -26,33 +26,72 @@ function createWindowPerch({ petWindows, helperDir, platform }) {
   let perchedPet = null;
   let relX = 0.3; // 趴在窗口顶边的水平相对位置
 
+  // [khalil] 诊断:内部状态透出(探针 /debug 可读)
+  const dbg = { perched: null, rects: 0, applied: 0, lastRect: null, lastApply: null, errors: [] };
+
   function stopTracker() {
     if (tracker) { tracker.kill(); tracker = null; }
+  }
+
+  /** 随机漫游开关:趴窗时必须关掉,否则渲染端每帧的位置会把钉位顶掉 */
+  async function setFixed(petId, on) {
+    // 走 PUT /config(pet-config 不收 main 条目);整体 try/catch 绝不炸主流程
+    try {
+      const base = (origin || 'http://127.0.0.1:3080') + petRoute;
+      const cfg = await (await fetch(base + '/config')).json();
+      const cur = (cfg?.main ?? cfg)?.pets?.find((p) => p.id === petId); if (cur && cur.fixedEnabled === on) { console.error(`[dsh-pet perch] fixedEnabled 已是 ${on},跳过写入`); return; }
+      const ent = cfg?.main ?? cfg;
+      const WHITELIST = ['pets','voiceEnabled','voiceName','voiceVolume','whisperPrompt','font','physics','confineToScreen','clickSoundEnabled','notificationsEnabled','chatMemoryRounds','whisperImageEnabled','chatImageEnabled','chatAnimationEnabled','chatImageLimit'];
+      const out = {};
+      for (const k of WHITELIST) if (k in ent) out[k] = ent[k];
+      out.pets = (ent.pets || []).map((p) => (p.id === petId ? { ...p, fixedEnabled: on } : p));
+      await fetch(base + '/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(out) });
+      console.error(`[dsh-pet perch] ${petId} fixedEnabled=${on}`);
+    } catch (e) {
+      console.error(`[dsh-pet perch] setFixed 失败: ${String(e)}`);
+    }
   }
 
   function detach(reason) {
     if (!perchedPet) return;
     console.error(`[dsh-pet perch] 脱钩(${reason})`);
+    setFixed(perchedPet, false);
+    clearState();
     stopTracker();
     perchedPet = null;
   }
 
   /** A·趴窗口:挂在 hwnd 窗口顶边跟随 */
-  function perch(petId) {
+  // [khalil] 趴窗状态落盘:PUT /config 会触发助手重启,重启后凭标记自动重新趴
+  const stateFile = require('node:path').join(require('node:os').homedir(), '.dsh', 'dsh-pet', 'perch-state.json');
+  function writeState(petId, hwnd) { try { require('node:fs').writeFileSync(stateFile, JSON.stringify({ petId, hwnd })); } catch (e) {} }
+  function clearState() { try { require('node:fs').rmSync(stateFile, { force: true }); } catch (e) {} }
+
+  function perch(petId, hwndIn) {
     if (perchedPet === petId) { detach('再点取消'); return 'off'; }
     if (perchedPet) detach('换目标');
+    let fg = null;
     const fgRows = psOnce(['fg']);
-    const fg = fgRows.length ? JSON.parse(fgRows[0]) : null;
-    if (!fg || fg.dead || !fg.usable) return 'no-window';
+    const fgd = fgRows.length ? JSON.parse(fgRows[0]) : null;
+    if (fgd && !fgd.dead && fgd.usable) fg = fgd;
+    if (!fg) {
+      // 前台不可趴(最大化/桌面):回落到 list 里面积最大的可趴窗口
+      const rows = psOnce(['list']).map((l) => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+      rows.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+      fg = rows.find((r) => !/Program Manager|Text Input/i.test(r.title)) || null;
+      if (!fg) return 'no-window';
+    }
     const win = petWindows.state.windows.get(petId);
     if (!win || win.isDestroyed()) return 'no-pet';
     // 记录趴点:取宠物当前 x 相对窗口宽度的比例( clamp 到 0.1~0.7 )
     const b = win.getContentBounds();
-    relX = Math.max(0.1, Math.min(0.7, (b.x + b.width / 2 - fg.x) / Math.max(1, fg.w)));
+    relX = hwndIn ? 0.3 : Math.max(0.1, Math.min(0.7, (b.x + b.width / 2 - fg.x) / Math.max(1, fg.w)));
     perchedPet = petId;
     console.error(`[dsh-pet perch] ${petId} 趴上 ${fg.title.slice(0, 24)} (relX=${relX.toFixed(2)})`);
+    dbg.perched = petId; dbg.rects = 0; dbg.applied = 0; dbg.errors = [];
     tracker = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1, 'track', String(fg.hwnd)], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
     let buf = '';
+    dbg.trackerPid = () => (tracker ? tracker.pid : null);
     tracker.stdout.on('data', (chunk) => {
       buf += String(chunk);
       let idx;
@@ -63,6 +102,7 @@ function createWindowPerch({ petWindows, helperDir, platform }) {
         let rect;
         try { rect = JSON.parse(line); } catch (e) { continue; }
         if (!perchedPet) return;
+        dbg.rects += 1; dbg.lastRect = { x: rect.x, y: rect.y, w: rect.w };
         if (rect.dead) { detach('窗口没了/最大化'); return; }
         const w = petWindows.state.windows.get(perchedPet);
         if (!w || w.isDestroyed()) { detach('宠物没了'); return; }
@@ -71,11 +111,17 @@ function createWindowPerch({ petWindows, helperDir, platform }) {
         // 钉到窗口顶边:宠物窗底边贴窗口顶 + 8px 重叠(踩在标题栏上)
         const b2 = w.getContentBounds();
         const nx = Math.round(rect.x + rect.w * relX - b2.width / 2);
-        const ny = Math.round(rect.y - b2.height + Math.round(b2.height * 0.08));
+        // 钳制:窗口顶着屏幕顶时,至少保留 65% 身体在屏内(否则"趴上去"=飞出屏幕像没反应)
+        const rawNy = rect.y - b2.height + Math.round(b2.height * 0.08);
+        const ny = Math.max(rawNy, -Math.round(b2.height * 0.35)); // 最多探出屏幕顶 35%
+        try { w.setContentBounds({ x: nx, y: ny, width: b2.width, height: b2.height }, false); dbg.applied += 1; dbg.lastApply = { nx, ny }; } catch (e) { dbg.errors.push('setContentBounds: ' + e.message); }
+        try { const rb = w.getContentBounds(); dbg.actual = { x: rb.x, y: rb.y }; } catch (e) {}
         w.setContentBounds({ x: nx, y: ny, width: b2.width, height: b2.height }, false);
       }
     });
     tracker.on('exit', () => { if (perchedPet) detach('tracker 退出'); });
+    void setFixed(petId, true); // 压住随机漫游(异步,失败不影响趴)
+    writeState(petId, fg.hwnd);
     return 'on';
   }
 
@@ -107,7 +153,11 @@ function createWindowPerch({ petWindows, helperDir, platform }) {
     return 'pushed';
   }
 
-  return { perch, pushNearby, isPerched: () => !!perchedPet };
+  reattach: (petId, hwnd) => perch(petId, hwnd),
+  /** 重启后凭落盘状态自动重新趴(不再写配置,fixed 已是 true) */
+  function reattach(petId, hwnd) { return perch(petId, hwnd); }
+
+  return { perch, pushNearby, isPerched: () => !!perchedPet, debug: () => ({ ...dbg, trackerPid: tracker ? tracker.pid : null, perchedPet }) };
 }
 
 module.exports = { createWindowPerch };

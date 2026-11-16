@@ -17,7 +17,7 @@ const { decideWindowIgnore } = require('../pointer-target.js');
  * @param deps.openTarget - 菜单首项的去向：desktop 唤起桌面应用；其余形态交给默认浏览器打开已鉴权地址。
  * @param deps.petRoute - 宠物路由前缀。
  */
-function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute }) {
+function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute, winAct }) {
   // 宠物窗口跟随：renderer 逐帧上报窗口内容区位置/尺寸
   ipcMain.on('pet:set-bounds', (event, bounds) => {
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -79,6 +79,15 @@ function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute }) {
     if (targetWin && !targetWin.isDestroyed()) {
       targetWin.webContents.send('pet:hit', { vx, vy });
     }
+  });
+
+  // [khalil] 窗口互动(趴/推):发送方窗口是谁,就由哪只宠物执行
+  ipcMain.on('pet:win-act', (event, payload) => {
+    if (!winAct) return;
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+    const petId = [...petWindows.state.windows.keys()].find((id) => petWindows.state.windows.get(id) === win);
+    if (petId && payload && (payload.action === 'perch' || payload.action === 'push')) winAct(petId, payload.action);
   });
 
   // 点击穿透翻转：渲染端在光标进出身体命中区时上报；穿透期间仍保留 forward。

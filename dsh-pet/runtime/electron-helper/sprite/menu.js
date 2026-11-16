@@ -58,6 +58,10 @@ Object.assign(PetSprite.prototype, {
       // DSH_PET_PETS 一次性建的，就地增删既改不了磁盘配置也改不了窗口数量。
       S.displayMenuBranch(),
       // 重载配置：请宿主重启桌面 Helper，全部窗口按最新配置重建。维护动作，排在回到初始位置之前。
+      // [khalil] 窗口互动:右键谁就是谁执行(走 petBridge IPC 到主进程)
+      ...(window.petBridge && typeof window.petBridge.windowAction === 'function'
+        ? [{ label: '趴窗口·跟随', action: 'win-perch' }, { label: '推一把旁边的窗口', action: 'win-push' }]
+        : []),
       { label: '重载配置', action: 'reload' },
       { label: '回到初始位置', action: 'home' },
     ];
@@ -147,6 +151,11 @@ Object.assign(PetSprite.prototype, {
     }
     if (leaf.action === 'set-display') {
       this.setPetDisplay(leaf.display); // 改这只宠物的显示位置：写 display 配置，由宿主重载生效
+      return;
+    }
+    if (leaf.action === 'win-perch' || leaf.action === 'win-push') {
+      // 右键的是谁就谁执行;petId 由主进程按发送方窗口判定
+      if (window.petBridge) window.petBridge.windowAction(leaf.action === 'win-perch' ? 'perch' : 'push');
       return;
     }
     if (leaf.action === 'reload') {

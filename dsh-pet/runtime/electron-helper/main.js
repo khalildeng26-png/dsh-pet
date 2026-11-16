@@ -240,12 +240,13 @@ const tray = createTray({
   platform: TRAY_PLATFORM,
   helperDir: __dirname,
   openChat: () => chatWindow.toggle('main'),
+  winAct: (petId, action) => (action === 'perch' ? windowPerch.perch(petId) : windowPerch.pushNearby(petId)),
   perch: () => windowPerch.perch('main'),
   pushNearby: () => windowPerch.pushNearby('main'),
 });
 
 /** [khalil] 窗口互动:趴窗口跟随 + 推窗口(win-helpers.ps1 做 Win32 眼和手)。 */
-const windowPerch = createWindowPerch({ petWindows, helperDir: __dirname, platform: process.platform });
+const windowPerch = createWindowPerch({ petWindows, helperDir: __dirname, platform: process.platform, origin: ORIGIN, petRoute: PET_ROUTE });
 
 /** 聊天窗口：托盘入口的独立深色竖窗,页面经 bridge 直连宿主 /chat(不依赖 DSH 网页端)。 */
 const chatWindow = createChatWindow({ BrowserWindow, helperDir: __dirname, isBridge: BRIDGE, origin: ORIGIN });
@@ -305,6 +306,15 @@ app.whenReady().then(() => {
   linuxPointer?.start();
   petWindows.create();
 
+  // [khalil] 趴窗状态恢复:助手被 PUT /config 重启后,凭落盘自动重新趴(延迟等窗口建好)
+  try {
+    const perchStateFile = require('node:path').join(require('node:os').homedir(), '.dsh', 'dsh-pet', 'perch-state.json');
+    if (require('node:fs').existsSync(perchStateFile)) {
+      const st = JSON.parse(require('node:fs').readFileSync(perchStateFile, 'utf8'));
+      if (st && st.petId && st.hwnd) setTimeout(() => { windowPerch.reattach(st.petId, st.hwnd); }, 3000);
+    }
+  } catch (e) {}
+
   // 常驻互撞兜底:官方结算只挂飞行帧,静止/漫游叠在一起没人管——主进程扫站场给小的那只发 pet:hit。
   // 障碍物:聊天窗可见时,压在窗上的宠物也会被推开(见 chat-window 的 obstacleBounds)。
   startAmbientCollision({ petWindows, obstacle: () => chatWindow.obstacleBounds() });
@@ -313,6 +323,26 @@ app.whenReady().then(() => {
   // 只听本机;失败不影响任何功能。
   try {
     const dbg = require('node:http').createServer((req, res) => {
+      if (req.url.startsWith('/debug/perch')) {
+        try { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ perch: windowPerch.perch('main') })); }
+        catch (e) { try { res.end(JSON.stringify({ perch: 'error: ' + e.message })); } catch (e2) {} }
+        return;
+      }
+      if (req.url.startsWith('/debug/push')) {
+        try { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ push: windowPerch.pushNearby('main') })); }
+        catch (e) { try { res.end(JSON.stringify({ push: 'error: ' + e.message })); } catch (e2) {} }
+        return;
+      }
+      if (req.url.startsWith('/debug/perch')) {
+        try { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ perch: windowPerch.perch('main') })); }
+        catch (e) { try { res.end(JSON.stringify({ perch: 'error: ' + e.message })); } catch (e2) {} }
+        return;
+      }
+      if (req.url.startsWith('/debug/push')) {
+        try { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ push: windowPerch.pushNearby('main') })); }
+        catch (e) { try { res.end(JSON.stringify({ push: 'error: ' + e.message })); } catch (e2) {} }
+        return;
+      }
       if (!req.url.startsWith('/debug')) { res.writeHead(404).end(); return; }
       Promise.all(
         [...petWindows.state.windows.entries()].map(async ([petId, win]) => {
@@ -321,7 +351,7 @@ app.whenReady().then(() => {
             const raw = await win.webContents.executeJavaScript(
               'JSON.stringify(window.__dshPetDebug || {})', true,
             );
-            return { petId, title: win.getTitle(), debug: JSON.parse(raw) };
+            const d = JSON.parse(raw); if (windowPerch.debug) d.perchDebug = windowPerch.debug(); return { petId, title: win.getTitle(), debug: d };
           } catch (e) {
             return { petId, error: String(e && e.message ? e.message : e) };
           }
@@ -331,15 +361,14 @@ app.whenReady().then(() => {
         res.end(JSON.stringify(rows, null, 1));
       }).catch(() => { res.writeHead(500).end(); });
     });
-    // 固定口被占(比如 DSH 模式与独立模式同机并跑)就退到随机口,绝不让探针拖垮启动
+    // [khalil] 探针端口:优先 7341,被占退随机;无论落在哪都写到文件,外部永远找得到
+    const probePortFile = require('node:path').join(require('node:os').homedir(), '.dsh', 'dsh-pet', 'probe-port.txt');
     dbg.on('error', () => {});
-    dbg.listen(7341, '127.0.0.1', () => {
-      console.error('[dsh-pet-desktop-helper] debug probe on http://127.0.0.1:7341/debug');
-    }).once('error', () => {
-      dbg.listen(0, '127.0.0.1', () => {
-        const addr = dbg.address();
-        console.error('[dsh-pet-desktop-helper] debug probe on http://127.0.0.1:' + (addr && addr.port) + '/debug (7341 被占)');
-      });
+    const writePort = () => {
+      try { const a = dbg.address(); if (a && a.port) require('node:fs').writeFileSync(probePortFile, String(a.port)); } catch (e) {}
+    };
+    dbg.listen(7341, '127.0.0.1', writePort).once('error', () => {
+      dbg.listen(0, '127.0.0.1', writePort);
     });
     dbg.unref?.();
   } catch (e) {

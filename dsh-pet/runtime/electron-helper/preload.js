@@ -49,6 +49,10 @@ contextBridge.exposeInMainWorld('petBridge', {
   requestKeyboardFocus() {
     ipcRenderer.send('pet:request-keyboard-focus');
   },
+  // [khalil] 窗口互动(趴窗口/推窗口):主进程按发送窗口判定 petId 后执行
+  windowAction(action) {
+    ipcRenderer.send('pet:win-act', { action });
+  },
   // 右键菜单「打开网站」：去向由主进程按宿主形态决定——桌面应用宿主唤起主窗口，否则用系统浏览器打开站点。
   openDshSite(url) {
     ipcRenderer.send('pet:open-site', { url });

@@ -86,6 +86,7 @@ switch ($Mode) {
     while ($true) {
       if (-not [WH]::IsWindow($h) -or [WH]::IsIconic($h) -or [WH]::IsZoomed($h)) { '{"dead":true}'; break }
       [WH]::RectJsonOf($h)
+      [Console]::Out.Flush()
       Start-Sleep -Milliseconds 200
     }
   }
