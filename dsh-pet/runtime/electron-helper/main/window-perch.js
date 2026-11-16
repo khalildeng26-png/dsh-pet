@@ -29,6 +29,25 @@ function createWindowPerch({ petWindows, helperDir, platform, origin, petRoute }
   // [khalil] 诊断:内部状态透出(探针 /debug 可读)
   const dbg = { perched: null, rects: 0, applied: 0, lastRect: null, lastApply: null, errors: [] };
 
+  let lastSent = null;
+
+  /** 发归一化位置指令(微锁),渲染端执行——主进程不再碰窗口 */
+  async function sendPosition(petId, x, y) {
+    try {
+      const base = (origin || 'http://127.0.0.1:3080') + petRoute;
+      const cfg = await (await fetch(base + '/config')).json();
+      const p = (cfg?.main ?? cfg)?.pets?.find((s) => s.id === petId);
+      const sf = p && p.display && p.display !== 'none' ? p.display : 'both';
+      const lk = await (await fetch(base + '/lock?pet=' + petId + '&surface=' + sf, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+      if (!lk || !lk.lockId) return;
+      try {
+        await fetch(base + '/position?pet=' + petId + '&surface=' + sf + '&lock=' + lk.lockId, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ x, y, mode: 'instant' }) });
+      } finally {
+        await fetch(base + '/lock/release?pet=' + petId, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lockId: lk.lockId }) });
+      }
+    } catch (e) { dbg.errors.push('sendPosition: ' + e.message); }
+  }
+
   function stopTracker() {
     if (tracker) { tracker.kill(); tracker = null; }
   }
@@ -56,6 +75,8 @@ function createWindowPerch({ petWindows, helperDir, platform, origin, petRoute }
     if (!perchedPet) return;
     console.error(`[dsh-pet perch] 脱钩(${reason})`);
     setFixed(perchedPet, false);
+    stopPerchAmbience();
+    lastSent = null;
     clearState();
     stopTracker();
     perchedPet = null;
@@ -73,7 +94,7 @@ function createWindowPerch({ petWindows, helperDir, platform, origin, petRoute }
     let fg = null;
     const fgRows = psOnce(['fg']);
     const fgd = fgRows.length ? JSON.parse(fgRows[0]) : null;
-    if (fgd && !fgd.dead && fgd.usable) fg = fgd;
+    if (fgd && !fgd.dead && fgd.usable && fgd.pid !== process.pid) fg = fgd; // 前台是宠物自己=自趴死循环,禁
     if (!fg) {
       // 前台不可趴(最大化/桌面):回落到 list 里面积最大的可趴窗口
       const rows = psOnce(['list']).map((l) => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
@@ -88,7 +109,7 @@ function createWindowPerch({ petWindows, helperDir, platform, origin, petRoute }
     relX = hwndIn ? 0.3 : Math.max(0.1, Math.min(0.7, (b.x + b.width / 2 - fg.x) / Math.max(1, fg.w)));
     perchedPet = petId;
     console.error(`[dsh-pet perch] ${petId} 趴上 ${fg.title.slice(0, 24)} (relX=${relX.toFixed(2)})`);
-    dbg.perched = petId; dbg.rects = 0; dbg.applied = 0; dbg.errors = [];
+    dbg.perched = petId; dbg.rects = 0; lastSent = null; dbg.applied = 0; dbg.errors = [];
     tracker = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1, 'track', String(fg.hwnd)], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
     let buf = '';
     dbg.trackerPid = () => (tracker ? tracker.pid : null);
@@ -102,27 +123,67 @@ function createWindowPerch({ petWindows, helperDir, platform, origin, petRoute }
         let rect;
         try { rect = JSON.parse(line); } catch (e) { continue; }
         if (!perchedPet) return;
-        dbg.rects += 1; dbg.lastRect = { x: rect.x, y: rect.y, w: rect.w };
         if (rect.dead) { detach('窗口没了/最大化'); return; }
+        if (rect.pid === process.pid) { detach('目标是宠物自己'); return; }
+        dbg.rects += 1; dbg.lastRect = { x: rect.x, y: rect.y, w: rect.w };
         const w = petWindows.state.windows.get(perchedPet);
         if (!w || w.isDestroyed()) { detach('宠物没了'); return; }
-        // 被拖拽/开菜单 = 主人把她摘下来
         if (petWindows.state.inputBusy.get(w.id) === true) { detach('主人拖拽'); return; }
-        // 钉到窗口顶边:宠物窗底边贴窗口顶 + 8px 重叠(踩在标题栏上)
-        const b2 = w.getContentBounds();
-        const nx = Math.round(rect.x + rect.w * relX - b2.width / 2);
-        // 钳制:窗口顶着屏幕顶时,至少保留 65% 身体在屏内(否则"趴上去"=飞出屏幕像没反应)
-        const rawNy = rect.y - b2.height + Math.round(b2.height * 0.08);
-        const ny = Math.max(rawNy, -Math.round(b2.height * 0.35)); // 最多探出屏幕顶 35%
-        try { w.setContentBounds({ x: nx, y: ny, width: b2.width, height: b2.height }, false); dbg.applied += 1; dbg.lastApply = { nx, ny }; } catch (e) { dbg.errors.push('setContentBounds: ' + e.message); }
-        try { const rb = w.getContentBounds(); dbg.actual = { x: rb.x, y: rb.y }; } catch (e) {}
-        w.setContentBounds({ x: nx, y: ny, width: b2.width, height: b2.height }, false);
+        // [架构修正] 不 setContentBounds 钉窗口(与渲染端位置同步拉锯=卡死);
+        // 窗口动了才发 /position 归一化指令,渲染端自己走——单一写入者
+        const moved = !lastSent || rect.x !== lastSent.x || rect.y !== lastSent.y || rect.w !== lastSent.w;
+        if (moved) {
+          lastSent = { x: rect.x, y: rect.y, w: rect.w };
+          const b2 = w.getContentBounds();
+          const nx = Math.round(rect.x + rect.w * relX - b2.width / 2);
+          const rawNy = rect.y - b2.height + Math.round(b2.height * 0.08);
+          const ny = Math.max(rawNy, -Math.round(b2.height * 0.35));
+          const area = petWindows.geometry ? petWindows.geometry().hull : { width: 1920, height: 1080 };
+          const xn = Math.max(-0.2, Math.min(1.2, nx / Math.max(1, area.width)));
+          const yn = Math.max(-0.4, Math.min(1.2, ny / Math.max(1, area.height)));
+          void sendPosition(perchedPet, xn, yn);
+          dbg.applied += 1; dbg.lastApply = { xn: +xn.toFixed(3), yn: +yn.toFixed(3) };
+        }
       }
-    });
+    });;
     tracker.on('exit', () => { if (perchedPet) detach('tracker 退出'); });
     void setFixed(petId, true); // 压住随机漫游(异步,失败不影响趴)
     writeState(petId, fg.hwnd);
+    startPerchAmbience(petId);
     return 'on';
+  }
+
+  // [khalil] 趴窗氛围:上去行礼,之后定期小动作(让她看起来"趴着陪主人干活")
+  let perchTimer = null;
+  const PERCH_IDLE_ANIMS = ['悠闲哼歌', '摇扇纳凉', '超大伸懒腰', '东张西望'];
+
+  async function playAnim(petId, name) {
+    try {
+      const base = (origin || 'http://127.0.0.1:3080') + petRoute;
+      const cfg = await (await fetch(base + '/config')).json();
+      const p = (cfg?.main ?? cfg)?.pets?.find((x) => x.id === petId);
+      const sf = p && p.display && p.display !== 'none' ? p.display : 'both';
+      const lk = await (await fetch(base + '/lock?pet=' + petId + '&surface=' + sf, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+      if (!lk || !lk.lockId) return;
+      try {
+        await fetch(base + '/anim?pet=' + petId + '&surface=' + sf + '&lock=' + lk.lockId, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+      } finally {
+        await fetch(base + '/lock/release?pet=' + petId, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lockId: lk.lockId }) });
+      }
+    } catch (e) { /* 动画失败不影响趴 */ }
+  }
+
+  function startPerchAmbience(petId) {
+    stopPerchAmbience();
+    void playAnim(petId, '女仆屈膝礼仪'); // 上去先行个礼
+    perchTimer = setInterval(() => {
+      if (!perchedPet) return;
+      void playAnim(perchedPet, PERCH_IDLE_ANIMS[Math.floor(Math.random() * PERCH_IDLE_ANIMS.length)]);
+    }, 90000 + Math.floor(Math.random() * 30000));
+    perchTimer.unref?.();
+  }
+  function stopPerchAmbience() {
+    if (perchTimer) { clearInterval(perchTimer); perchTimer = null; }
   }
 
   /** B·推窗口:找宠物旁边最近的非最大化窗口,推一把(方向=远离宠物) */
