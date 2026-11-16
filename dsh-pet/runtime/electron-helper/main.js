@@ -49,6 +49,7 @@ const { createDpi } = require('./main/dpi.js');
 const { createBridge } = require('./main/bridge.js');
 const { createTray } = require('./main/tray.js');
 const { createChatWindow } = require('./main/chat-window.js');
+const { createWindowPerch } = require('./main/window-perch.js');
 const { startAmbientCollision } = require('./main/ambient-collision.js');
 const { createWindows } = require('./main/windows.js');
 const { registerIpc } = require('./main/ipc.js');
@@ -239,7 +240,12 @@ const tray = createTray({
   platform: TRAY_PLATFORM,
   helperDir: __dirname,
   openChat: () => chatWindow.toggle('main'),
+  perch: () => windowPerch.perch('main'),
+  pushNearby: () => windowPerch.pushNearby('main'),
 });
+
+/** [khalil] 窗口互动:趴窗口跟随 + 推窗口(win-helpers.ps1 做 Win32 眼和手)。 */
+const windowPerch = createWindowPerch({ petWindows, helperDir: __dirname, platform: process.platform });
 
 /** 聊天窗口：托盘入口的独立深色竖窗,页面经 bridge 直连宿主 /chat(不依赖 DSH 网页端)。 */
 const chatWindow = createChatWindow({ BrowserWindow, helperDir: __dirname, isBridge: BRIDGE, origin: ORIGIN });
