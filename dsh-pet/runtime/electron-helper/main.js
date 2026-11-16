@@ -325,9 +325,17 @@ app.whenReady().then(() => {
         res.end(JSON.stringify(rows, null, 1));
       }).catch(() => { res.writeHead(500).end(); });
     });
-    dbg.listen(7341, '127.0.0.1');
+    // 固定口被占(比如 DSH 模式与独立模式同机并跑)就退到随机口,绝不让探针拖垮启动
+    dbg.on('error', () => {});
+    dbg.listen(7341, '127.0.0.1', () => {
+      console.error('[dsh-pet-desktop-helper] debug probe on http://127.0.0.1:7341/debug');
+    }).once('error', () => {
+      dbg.listen(0, '127.0.0.1', () => {
+        const addr = dbg.address();
+        console.error('[dsh-pet-desktop-helper] debug probe on http://127.0.0.1:' + (addr && addr.port) + '/debug (7341 被占)');
+      });
+    });
     dbg.unref?.();
-    console.error('[dsh-pet-desktop-helper] debug probe on http://127.0.0.1:7341/debug');
   } catch (e) {
     console.error('[dsh-pet-desktop-helper] debug probe failed:', String(e));
   }
