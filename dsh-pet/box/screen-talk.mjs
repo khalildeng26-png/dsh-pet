@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { hotTopics } from './hot.mjs';
 
 // 单实例锁(路径可用 ST_LOCK_FILE 覆盖,供测试并行跑)
-const LOCK_FILE = process.env.ST_LOCK_FILE || 'D:/dsh/bin/.screen-talk.lock';
+const LOCK_FILE = process.env.ST_LOCK_FILE || __here('./.screen-talk.lock');
 try {
   if (Date.now() - statSync(LOCK_FILE).mtimeMs < 90000) { console.error('[screen-talk] already running, exit'); process.exit(0); }
 } catch {}
@@ -48,7 +48,7 @@ async function j(method, path, body) {
 }
 
 function screenshot() {
-  const s = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', __here('./look-screen-shot.ps1')], { timeout: 25000 });
+  const s = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'D:\\dsh\\bin\\look-screen-shot.ps1'], { timeout: 25000 });
   if (s.status !== 0) throw new Error('screenshot failed: ' + (s.stderr || '').toString().slice(0, 120));
   return readFileSync(join(tmpdir(), 'lookscreen.jpg')).toString('base64');
 }
@@ -79,16 +79,68 @@ async function improvise(b64, actions, hot) {
   const hotBlock = hot
     ? `\n【近期真实热搜/热点】(妹妹玩梗的主要来源,可挑最多1-2个自然融入;不合适就完全不用,永远以屏幕内容为主,严禁生硬报菜名)\n${hot}\n`
     : '';
+  const baseMessages = [{
+    role: 'user',
+    content: [
+      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } },
+      { type: 'text', text: `${PERSONA}${hotBlock}\n只输出严格JSON {"lines":[{"pet":"${MAIN}"|"${SIDE}","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责玩热梗、姐姐负责毒舌吐槽,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。` },
+    ],
+  }];
+
+  async function send(body) {
+    const r = await fetch(BASE.replace(/\/$/, '') + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${KEY}` },
+      body: JSON.stringify(body),
+    });
+    return r.json().catch(() => null);
+  }
+
+  // 优先路:给模型挂「联网搜索」工具——它自己决定要不要搜、搜什么(最多追加一轮)
+  const searchTool = {
+    type: 'function',
+    function: {
+      name: 'search_hot',
+      description: '联网搜索最新的热搜榜与新闻(微博热榜/知乎热议/每日新闻)。当你想用更新鲜的热梗或验证某话题现状时调用,不需要就不用。',
+      parameters: {
+        type: 'object',
+        properties: { keyword: { type: 'string', description: '可选关键词,只返回含它的条目' } },
+        required: [],
+      },
+    },
+  };
+  try {
+    let messages = baseMessages;
+    for (let round = 0; round < 2; round += 1) {
+      const d = await send({
+        model: MODEL, messages, max_tokens: 900, temperature: 1.0,
+        tools: [searchTool], tool_choice: 'auto', thinking: { type: 'disabled' },
+      });
+      if (!d || d.error) break;
+      const msg = d?.choices?.[0]?.message;
+      const call = msg?.tool_calls?.[0];
+      if (call && call.function?.name === 'search_hot') {
+        let kw = '';
+        try { kw = String(JSON.parse(call.function.arguments || '{}').keyword || ''); } catch (e) {}
+        const fresh = await hotTopics({ fresh: true }).catch(() => '');
+        const result = kw && fresh
+          ? fresh.split('\n').map((l) => l.split(' / ').filter((it) => it.includes(kw)).join(' / ')).filter(Boolean).join('\n')
+          : fresh;
+        console.log(`[screen-talk] 模型主动联网搜索热点${kw ? `(${kw})` : ''}${result ? '' : ' → 无结果'}`);
+        messages = [...messages, msg, { role: 'tool', tool_call_id: call.id, content: result || '(搜索暂无结果,用已有素材)' }];
+        continue;
+      }
+      const lines = tryParseLines(msg?.content || '');
+      if (lines) return lines;
+      break;
+    }
+  } catch (e) { /* 工具路失败退老路 */ }
+
+  // 兜底路:不带工具的旧矩阵(json_object × thinking)
   for (const fmt of [{ type: 'json_object' }, null]) {
     const body = {
       model: MODEL,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } },
-          { type: 'text', text: `${PERSONA}${hotBlock}\n只输出严格JSON {"lines":[{"pet":"${MAIN}"|"${SIDE}","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责玩热梗、姐姐负责毒舌吐槽,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。` },
-        ],
-      }],
+      messages: baseMessages,
       max_tokens: 900,
       temperature: 1.0,
     };
@@ -96,12 +148,7 @@ async function improvise(b64, actions, hot) {
     for (const think of [{ type: 'disabled' }, null]) {
       const b = { ...body };
       if (think) b.thinking = think; else delete b.thinking;
-      const r = await fetch(BASE.replace(/\/$/, '') + '/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${KEY}` },
-        body: JSON.stringify(b),
-      });
-      const d = await r.json().catch(() => null);
+      const d = await send(b);
       if (!d || d.error) continue;
       const raw = d?.choices?.[0]?.message?.content || '';
       const lines = tryParseLines(raw);

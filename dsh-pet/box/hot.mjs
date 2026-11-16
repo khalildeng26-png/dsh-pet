@@ -34,10 +34,11 @@ function staleCache() {
 
 /**
  * 返回一段紧凑的热点文本(约 300-500 字),失败返回 ''(调用方跳过注入即可)。
+ * @param {{ fresh?: boolean }} opts fresh=true 跳过缓存(模型主动搜索时用,保证最新)
  * @returns {Promise<string>}
  */
-export async function hotTopics() {
-  const cached = freshCache();
+export async function hotTopics(opts = {}) {
+  const cached = opts.fresh ? null : freshCache();
   if (cached) return cached;
   const [weibo, zhihu, news] = await Promise.all([
     fetchJson('https://60s.viki.moe/v2/weibo'),
