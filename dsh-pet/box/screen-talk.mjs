@@ -4,7 +4,7 @@
 // Env: ST_KEY(必填) / ST_BASE / ST_MODEL / ST_INTERVAL(秒,默认120)
 //      ST_WINDOW / ST_DAYS / ST_HOLIDAYS_FILE —— 与看屏同一套时间规则
 import { spawnSync } from 'node:child_process';
-import { readFileSync, openSync, closeSync, statSync, utimesSync } from 'node:fs';
+import { readFileSync, writeFileSync, openSync, closeSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hotTopics } from './hot.mjs';
@@ -12,7 +12,7 @@ import { fileURLToPath as __ftp } from 'node:url';
 const __here = (p) => __ftp(new URL(p, import.meta.url));
 
 // 单实例锁(路径可用 ST_LOCK_FILE 覆盖,供测试并行跑)
-const LOCK_FILE = process.env.ST_LOCK_FILE || __here('./.screen-talk.lock');
+const LOCK_FILE = process.env.ST_LOCK_FILE || 'D:/dsh/bin/.screen-talk.lock';
 try {
   if (Date.now() - statSync(LOCK_FILE).mtimeMs < 90000) { console.error('[screen-talk] already running, exit'); process.exit(0); }
 } catch {}
@@ -38,6 +38,23 @@ const PERSONA = `你是Q版鲸鱼女仆姐妹(桌面宠物)的小剧场导演。
 【关系动力学】亲姐妹,互怼是爱的语言,但绝不允许外人说对方半句。妹妹闯祸姐姐兜底,姐姐过时妹妹补课。屏幕中出现两只鲸鱼女仆就是她们本人(更大只=姐姐,更小只=妹妹),台词互称姐姐/妹妹,绝不说"分身/克隆"。主人是她们共同吐槽又共同关心的对象(吐槽他的代码/熬夜/折腾,但真出bug了会心疼)。`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// —— 防重复:最近说过的台词(模型看不到自己的历史,不喂清单它就翻来覆去那几个梗) ——
+const USED_FILE = __here('./.used-lines.json');
+function loadRecentUsed() {
+  try {
+    const arr = JSON.parse(readFileSync(USED_FILE, 'utf8'));
+    return Array.isArray(arr) ? arr.slice(-9) : [];
+  } catch { return []; }
+}
+function recordUsed(lines) {
+  try {
+    const next = [...loadRecentUsed(), ...lines.map((l) => String(l.text || '').slice(0, 40))].slice(-24);
+    writeFileSync(USED_FILE, JSON.stringify(next));
+  } catch {}
+}
+// —— 喜剧路线轮盘:每场随机一种,同样的素材换着法演 ——
+const STYLES = ['互怼抬杠(为反对而反对)', '谐音梗和文字游戏', '夸张脑补(把小事脑补成大戏)', '一本正经地胡说八道', '互相拆台揭老底', '凡尔赛式自夸', '歌词或名言魔改乱入', '主播腔解说(把主人操作当赛事播报)', '卖惨比惨大赛', '冷吐槽(越冷静越好笑)', '接话茬玩梗(对方说啥都往歪处接)', '教育失败现场(姐姐讲道理妹妹歪解)'];
 
 async function j(method, path, body) {
   const r = await fetch(API + path, {
@@ -76,16 +93,21 @@ function tryParseLines(raw) {
   return null;
 }
 
-async function improvise(b64, actions, hot) {
+async function improvise(b64, actions, hot, recentUsed, style) {
   const list = actions.slice(0, 40).join(',');
   const hotBlock = hot
     ? `\n【近期真实热搜/热点】(妹妹玩梗的主要来源,可挑最多1-2个自然融入;不合适就完全不用,永远以屏幕内容为主,严禁生硬报菜名)\n${hot}\n`
     : '';
+  const recent = recentUsed || [];
+  const recentBlock = recent.length
+    ? `\n【她们最近已说过的台词】(严禁重复、严禁换个说法再讲一遍、也别再玩其中出现过的梗)\n${recent.map((t) => '- ' + t).join('\n')}\n`
+    : '';
+  const styleBlock = style ? `\n【本场喜剧路线】${style}(贴合就多用,不贴合就丢掉,别硬演)\n` : '';
   const baseMessages = [{
     role: 'user',
     content: [
       { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } },
-      { type: 'text', text: `${PERSONA}${hotBlock}\n只输出严格JSON {"lines":[{"pet":"${MAIN}"|"${SIDE}","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责玩热梗、姐姐负责毒舌吐槽,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。` },
+      { type: 'text', text: `${PERSONA}${hotBlock}${recentBlock}${styleBlock}\n只输出严格JSON {"lines":[{"pet":"${MAIN}"|"${SIDE}","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责玩热梗、姐姐负责毒舌吐槽,梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材,text为不超过18个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。` },
     ],
   }];
 
@@ -230,9 +252,11 @@ async function tick(why) {
     if (await anySleeping()) { console.log(`[${why}] 有人睡着,跳过`); return; }
     const actions = await animPool().catch(() => []);
     const hot = await hotTopics().catch(() => '');
-    const lines = await improvise(screenshot(), actions, hot);
-    console.log(`[${new Date().toLocaleTimeString()}] (${why}) 姐妹同屏会:`);
+    const style = STYLES[Math.floor(Math.random() * STYLES.length)];
+    const lines = await improvise(screenshot(), actions, hot, loadRecentUsed(), style);
+    console.log(`[${new Date().toLocaleTimeString()}] (${why}) [路线:${style}] 姐妹同屏会:`);
     await playLines(lines, actions);
+    recordUsed(lines);
   } catch (e) {
     console.error(`[screen-talk] ${why}:`, e.message);
   } finally {
