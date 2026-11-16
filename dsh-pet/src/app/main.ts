@@ -205,13 +205,17 @@ function boxDir(): string {
   return candidates.find((p) => existsSync(join(p, 'screen-talk.mjs'))) ?? '';
 }
 
-/** [khalil] 读独立 AI 设置里的 key：未配置返回空串（首启引导与 box 服务的 LLM 都靠它）。 */
+/** [khalil] 读独立 AI 设置里的 DeepSeek key：未配置返回空串（首启引导与 box 服务的 LLM 都靠它）。
+ *  上游 0.4.9 起密钥按服务商分栏存（keys.deepseekApiKey），兼容旧版顶层 apiKey。 */
 function readApiKey(): string {
   try {
     const raw = JSON.parse(readFileSync(join(dshHomeDir(), 'dsh-pet', 'standalone-ai.json'), 'utf8')) as {
       apiKey?: unknown;
+      keys?: { deepseekApiKey?: unknown };
     };
-    return typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '';
+    const fromKeys = raw.keys?.deepseekApiKey;
+    const value = typeof fromKeys === 'string' && fromKeys ? fromKeys : raw.apiKey;
+    return typeof value === 'string' ? value.trim() : '';
   } catch {
     return '';
   }
