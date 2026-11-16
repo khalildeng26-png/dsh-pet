@@ -170,9 +170,22 @@ async function boot(): Promise<void> {
 
   // [khalil] box 服务:捆绑的姐妹同屏会/手动看屏/小剧场脚本随包分发,
   // 用本进程的运行时以纯 Node 模式拉起(ELECTRON_RUN_AS_NODE=1),宠物 API 指向本机服务。
-  const boxChildren = spawnBoxServices(origin);
+  // key 时序:key 从设置页读取,启动瞬间多半还没填——所以只在 key 就绪后拉起,
+  // 之后每 20s 轮询:key 首次出现→拉起;key 被换→杀旧拉新(env 是启动快照,必须重启才生效)。
+  let boxKey = readApiKey();
+  let boxChildren = boxKey ? spawnBoxServices(origin, boxKey) : [];
+  const boxKeyTimer = setInterval(() => {
+    const k = readApiKey();
+    if (k === boxKey) return;
+    log(`box key 变更:${boxKey ? '换Key' : '首次配置'} → ${k ? '重启服务' : '停止服务(清空)'}`);
+    for (const child of boxChildren) child.kill();
+    boxChildren = [];
+    boxKey = k;
+    if (k) boxChildren = spawnBoxServices(origin, k);
+  }, 20000);
+  boxKeyTimer.unref?.();
   // 首次运行未配置 key:弹引导窗直达 AI 设置页(带令牌),填完保存即可,无需重启。
-  if (!readApiKey()) {
+  if (!boxKey) {
     void app.whenReady().then(() => {
       const win = new BrowserWindow({
         width: 760,
@@ -221,12 +234,11 @@ function readApiKey(): string {
   }
 }
 
-/** [khalil] 拉起三个 box 服务；key 之后在设置页补填也能用（脚本每次调用现读 env，由本函数注入）。 */
-function spawnBoxServices(origin: string): ChildProcess[] {
+/** [khalil] 拉起三个 box 服务；key 由调用方传入（未配置时不该被调用——见 boot 的 key 轮询）。 */
+function spawnBoxServices(origin: string, key: string): ChildProcess[] {
   const dir = boxDir();
   log(`box 目录判定：${dir || '（未找到，不拉起）'}；DSH_PET_BOX=${process.env.DSH_PET_BOX ?? '未设'}`);
-  if (!dir || process.env.DSH_PET_BOX === '0') return [];
-  const key = readApiKey();
+  if (!dir || process.env.DSH_PET_BOX === '0' || !key) return [];
   log(`box key 状态：${key ? '已配置' : '未配置（等待设置页填写）'}`);
   try {
     const env: NodeJS.ProcessEnv = {

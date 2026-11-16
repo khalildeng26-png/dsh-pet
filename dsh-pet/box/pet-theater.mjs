@@ -5,6 +5,8 @@
 //        node pet-theater.mjs --once    -> play one scene immediately
 import { readFileSync, openSync, closeSync, statSync, utimesSync } from 'node:fs';
 import { hotTopics } from './hot.mjs';
+import { fileURLToPath as __ftp } from 'node:url';
+const __here = (p) => __ftp(new URL(p, import.meta.url));
 
 // 单实例锁:已有活实例(90s 内有心跳)就退出,防双开
 const LOCK_FILE = __here('./.pet-theater.lock');

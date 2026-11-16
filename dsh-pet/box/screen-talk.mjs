@@ -8,6 +8,8 @@ import { readFileSync, openSync, closeSync, statSync, utimesSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hotTopics } from './hot.mjs';
+import { fileURLToPath as __ftp } from 'node:url';
+const __here = (p) => __ftp(new URL(p, import.meta.url));
 
 // 单实例锁(路径可用 ST_LOCK_FILE 覆盖,供测试并行跑)
 const LOCK_FILE = process.env.ST_LOCK_FILE || __here('./.screen-talk.lock');
@@ -48,7 +50,7 @@ async function j(method, path, body) {
 }
 
 function screenshot() {
-  const s = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'D:\\dsh\\bin\\look-screen-shot.ps1'], { timeout: 25000 });
+  const s = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', __here('./look-screen-shot.ps1')], { timeout: 25000 });
   if (s.status !== 0) throw new Error('screenshot failed: ' + (s.stderr || '').toString().slice(0, 120));
   return readFileSync(join(tmpdir(), 'lookscreen.jpg')).toString('base64');
 }
