@@ -176,10 +176,11 @@ test('restoring defaults cannot be undone by a concurrent display change', async
   ]);
   assert.ok(results.every((r) => r.status === 200 && r.body.main));
   assert.equal(read().note, undefined);
-  assert.deepEqual(
-    read().pets.map((p: { id: string }) => p.id),
-    ['main'],
-  );
+  // [khalil] 出厂默认是姐妹双宠(main+maid-2),恢复默认后的清单以「用户的 extra 消失、main 回来」为准,
+  // 不再钉死上游单宠时代的 ['main']——钉死会把本 fork 的出厂形态误判成失败。
+  const ids = read().pets.map((p: { id: string }) => p.id);
+  assert.ok(ids.includes('main'), '恢复默认后 main 必须在');
+  assert.ok(!ids.includes('extra'), '用户自行添加的宠物必须被恢复默认清掉');
 });
 
 test('config reads do not observe an incomplete concurrent save', async () => {

@@ -73,14 +73,44 @@ export function readMenuItems(data: unknown, surface: 'web' | 'desktop'): MenuMo
  *  层级只按 label 是否重名决定：label 在全部第三方项里唯一 → 直接平铺（`更多 / 弹弓`）；
  *  label 重名 → 每个 owner 各占一个子菜单（`更多 / owner / label`），靠它区分同名项。
  *  重名只可能跨 owner（同一 owner 内 label 按 Map 去重，见 host/menu 的注册表），子项仍是原
- *  label——点击上报的 (owner, label) 与平铺时完全一致，两端点击处理不用分叉。 */
-export function buildMoreBranch(items: readonly MenuMoreItem[]): MenuBranch | null {
+ *  label——点击上报的 (owner, label) 与平铺时完全一致，两端点击处理不用分叉。
+ *
+ *  [khalil] fork 增量：定向 owner 约定。owner 写成 `分支名@petId`（如 `性格@main`）时：
+ *  - 传了 viewerPet 且不等于 @ 后的 petId → 这一项不进本宠物的菜单（右键谁就只看谁的）；
+ *  - 通过过滤的项统一收进「@ 前缀」命名的子菜单（`更多 / 性格 / 傲娇毒舌`），不再依赖重名规则；
+ *  - 不带 @ 的 owner 走既有平铺/重名规则，行为零变化（老注册方与既有测试不受影响）；
+ *  - 点击上报的 owner 保持原串（含 @petId），注册方按 owner 就能分清目标宠物。
+ *  viewerPet 缺省（老调用方）时不过滤：全部定向项并进同名分支展示。 */
+const SCOPED_OWNER_RE = /^([^@\s]{1,30})@([A-Za-z0-9_-]{1,64})$/;
+
+/** 解析定向 owner（`分支名@petId`）；形状不符返回 null（走既有行为）。 */
+export function parseScopedOwner(owner: string): { branch: string; pet: string } | null {
+  const m = SCOPED_OWNER_RE.exec(owner);
+  return m ? { branch: m[1], pet: m[2] } : null;
+}
+
+export function buildMoreBranch(items: readonly MenuMoreItem[], viewerPet?: string): MenuBranch | null {
   const labelCount = new Map<string, number>();
   for (const item of items) labelCount.set(item.label, (labelCount.get(item.label) ?? 0) + 1);
   const children: MenuNode[] = [];
   // owner → 该 owner 的重名子菜单；第一次遇到它的重名项时按当时顺序插进 children（保持注册顺序）
   const branches = new Map<string, MenuBranch>();
+  // 定向 owner 的子菜单：键加前缀，绝不与上面按 owner 原串命名的分支串键
+  const scopedBranches = new Map<string, MenuBranch>();
   for (const item of items) {
+    const scoped = parseScopedOwner(item.owner);
+    if (scoped) {
+      if (viewerPet !== undefined && scoped.pet !== viewerPet) continue; // 别的宠物的定向项：本菜单不显示
+      const key = 'scoped:' + scoped.branch;
+      let branch = scopedBranches.get(key);
+      if (branch === undefined) {
+        branch = { label: scoped.branch, children: [] };
+        scopedBranches.set(key, branch);
+        children.push(branch);
+      }
+      branch.children.push({ label: item.label, action: 'third-party', owner: item.owner });
+      continue;
+    }
     if ((labelCount.get(item.label) ?? 0) === 1) {
       children.push({ label: item.label, action: 'third-party', owner: item.owner });
       continue;

@@ -21,7 +21,9 @@ try { closeSync(openSync(LOCK_FILE, 'w')); } catch {}
 setInterval(() => { try { utimesSync(LOCK_FILE, new Date(), new Date()); } catch { try { closeSync(openSync(LOCK_FILE, 'w')); } catch {} } }, 30000).unref?.();
 
 const API = process.env.PET_API || 'http://127.0.0.1:3080/dsh-pet-7340';
-const OWNER = '性格';
+// 定向 owner(`分支名@petId`):fork 渲染端只在本宠物的右键菜单里显示并收进「更多→性格」子菜单
+// ——右键姐姐只出姐姐的 3 项,右键妹妹只出妹妹的 3 项。老渲染端(不认约定)退化为全部平铺,点击仍正确。
+const OWNER_OF = (pet) => `性格@${pet}`;
 const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh');
 const CONFIG = process.env.PERS_CONFIG || join(dshHome, 'dsh-pet', 'main-config.jsonc');
 
@@ -35,14 +37,11 @@ async function j(method, path, body) {
   try { return JSON.parse(t); } catch { return { raw: t, status: r.status }; }
 }
 
-// 菜单项:当前性格带 ✓ 前缀(注册是 owner 级整体覆盖,切换后重注册,下一次右键即见新 ✓)
-function labels() {
+// 菜单项:当前性格带 ✓ 前缀(注册是 owner 级整体覆盖,切换后重注册,下一次右键即见新 ✓)。
+// 子菜单已按宠物分流,不再需要「姐姐·」前缀。
+function labels(pet) {
   const st = readPersonality();
-  const out = [];
-  for (const [pet, list] of Object.entries(PERSONALITIES)) {
-    for (const p of list) out.push((st[pet] === p.key ? '✓ ' : '') + PET_NAMES[pet] + '·' + p.label);
-  }
-  return out;
+  return PERSONALITIES[pet].map((p) => (st[pet] === p.key ? '✓ ' : '') + p.label);
 }
 
 async function surfaceOf(pet) {
@@ -84,17 +83,18 @@ function switchTo(pet, key) {
   writeFileSync(PERS_FILE, JSON.stringify(st), 'utf8');
 }
 
-async function main() {
-  console.log(`[personality] config=${CONFIG} state=${PERS_FILE}`);
+// 每只宠物一条独立循环:注册自己的定向 owner → 长轮询自己的事件 → 处理。
+// 两条循环互不等待,点谁切谁,零串扰。
+async function petLoop(pet) {
   for (;;) {
     try {
-      await j('POST', '/menu/item', { owner: OWNER, labels: labels(), target: 'both' });
-      const ev = await j('GET', `/menu/events?owner=${encodeURIComponent(OWNER)}&wait=9000`);
+      await j('POST', '/menu/item', { owner: OWNER_OF(pet), labels: labels(pet), target: 'both' });
+      const ev = await j('GET', `/menu/events?owner=${encodeURIComponent(OWNER_OF(pet))}&wait=9000`);
       for (const [label, clickedOn] of Object.entries(ev?.events ?? {})) {
-        const m = /^(姐姐|妹妹)·(.+)$/.exec(label.replace(/^✓ /, ''));
-        if (!m) continue;
-        const pet = m[1] === '姐姐' ? 'main' : 'maid-2';
-        const pers = PERSONALITIES[pet].find((p) => p.label === m[2]);
+        // poll 返回的是全量 label 映射,没被点的值是 null——必须过滤,否则每个轮询周期
+        // 都会把全部性格空走一遍(气泡刷屏+✓永远收敛在最后一项,实测踩过)
+        if (!clickedOn || typeof clickedOn !== 'string') continue;
+        const pers = PERSONALITIES[pet].find((p) => p.label === label.replace(/^✓ /, ''));
         if (!pers) continue;
         if (current(pet).key === pers.key) {
           await say(pet, `人家本来就是「${pers.label}」啦!`);
@@ -110,9 +110,16 @@ async function main() {
         }
       }
     } catch (e) {
-      console.error('[personality] loop:', e.message, '- retry 5s');
+      console.error(`[personality] loop(${pet}):`, e.message, '- retry 5s');
       await new Promise((r) => setTimeout(r, 5000));
     }
   }
+}
+
+async function main() {
+  console.log(`[personality] config=${CONFIG} state=${PERS_FILE}`);
+  // 清掉旧版无标记 owner(避免旧渲染端同时看到 6 项平铺 + 定向子菜单两份)
+  await j('DELETE', '/menu/item?owner=' + encodeURIComponent('性格')).catch(() => {});
+  await Promise.all(Object.keys(PERSONALITIES).map((pet) => petLoop(pet)));
 }
 main();

@@ -337,8 +337,9 @@ export function createCardEntry(rt: CardEntryRuntime) {
     /** 打开右键菜单。 */
     const handleContextMenu = (e: ReactNS.MouseEvent<HTMLDivElement>): void => {
       // 工具项与动作树；「查看余额」无条件显示，手动请求不受开关限制。
-      // 第三方菜单项统一收在「更多」下：label 唯一的平铺，重名的按 owner 分子菜单（见 buildMoreBranch）。
-      const more = buildMoreBranch(menuItemsRef.current);
+      // 第三方菜单项统一收在「更多」下：label 唯一的平铺，重名的按 owner 分子菜单；
+      // owner 写成 `分支名@petId` 的定向项只进本宠物（cfgRef.current.id）的菜单（见 buildMoreBranch）。
+      const more = buildMoreBranch(menuItemsRef.current, cfgRef.current.id);
       // 「配图」：按配置里的清单分成「纳入对话的配图 / 其他」，点一张就用它说一句。
       // 没有可用图时返回 null，整项不出现（不占一个点开是空的菜单）。
       // 缩略图靠 /pic/memes/<素材根>/<名称>.png：素材根就是拍平时写入的条目 key。

@@ -120,3 +120,76 @@ describe('buildMoreBranch —— 「更多」：label 唯一平铺，重名收�
     });
   });
 });
+
+describe('buildMoreBranch —— [khalil] 定向 owner（分支名@petId）：按宠物分流并收进命名子菜单', () => {
+  const items = [
+    { owner: '性格@main', label: '傲娇毒舌' },
+    { owner: '性格@main', label: '温柔贤惠' },
+    { owner: '性格@maid-2', label: '玩梗狂魔' },
+    { owner: '小游戏', label: '弹弓' },
+  ];
+
+  test('viewerPet 匹配 → 只见本宠物的定向项，收进「性格」子菜单，owner 原串保留', () => {
+    assert.deepEqual(buildMoreBranch(items, 'main'), {
+      label: '更多',
+      children: [
+        {
+          label: '性格',
+          children: [
+            { label: '傲娇毒舌', action: 'third-party', owner: '性格@main' },
+            { label: '温柔贤惠', action: 'third-party', owner: '性格@main' },
+          ],
+        },
+        { label: '弹弓', action: 'third-party', owner: '小游戏' },
+      ],
+    });
+  });
+
+  test('viewerPet 是另一只 → 它的定向项过滤干净，不残留空分支', () => {
+    assert.deepEqual(buildMoreBranch(items, 'maid-2'), {
+      label: '更多',
+      children: [
+        {
+          label: '性格',
+          children: [{ label: '玩梗狂魔', action: 'third-party', owner: '性格@maid-2' }],
+        },
+        { label: '弹弓', action: 'third-party', owner: '小游戏' },
+      ],
+    });
+  });
+
+  test('只剩被过滤的定向项 → 整个「更多」为 null', () => {
+    assert.equal(buildMoreBranch([{ owner: '性格@main', label: '傲娇毒舌' }], 'maid-2'), null);
+  });
+
+  test('不传 viewerPet（老调用方）→ 不过滤，同分支名的定向项并进同一子菜单', () => {
+    assert.deepEqual(buildMoreBranch(items), {
+      label: '更多',
+      children: [
+        {
+          label: '性格',
+          children: [
+            { label: '傲娇毒舌', action: 'third-party', owner: '性格@main' },
+            { label: '温柔贤惠', action: 'third-party', owner: '性格@main' },
+            { label: '玩梗狂魔', action: 'third-party', owner: '性格@maid-2' },
+          ],
+        },
+        { label: '弹弓', action: 'third-party', owner: '小游戏' },
+      ],
+    });
+  });
+
+  test('不带 @ 的 owner 与定向项同 label 重名 → 各走各路：定向项进命名分支，普通项进 owner 分支', () => {
+    const mixed = [
+      { owner: '性格@main', label: '签到' },
+      { owner: '插件A', label: '签到' },
+    ];
+    assert.deepEqual(buildMoreBranch(mixed, 'main'), {
+      label: '更多',
+      children: [
+        { label: '性格', children: [{ label: '签到', action: 'third-party', owner: '性格@main' }] },
+        { label: '插件A', children: [{ label: '签到', action: 'third-party', owner: '插件A' }] },
+      ],
+    });
+  });
+});
