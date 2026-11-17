@@ -93,8 +93,11 @@ function tryParseLines(raw) {
   if (!m) return null;
   for (const cand of [m[0], m[0].replace(/,\s*([}\]])/g, '$1')]) {
     try {
-      const lines = JSON.parse(cand).lines;
-      if (Array.isArray(lines) && lines.length) return lines.filter((l) => l && l.text).slice(0, 3);
+      const o = JSON.parse(cand);
+      if (Array.isArray(o.lines) && o.lines.length) {
+        const saw = typeof o.saw === 'string' ? o.saw.trim().slice(0, 60) : '';
+        return { saw, lines: o.lines.filter((l) => l && l.text).slice(0, 3) };
+      }
     } catch {}
   }
   return null;
@@ -102,6 +105,10 @@ function tryParseLines(raw) {
 
 async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') {
   const cm = current(MAIN), cs = current(SIDE); // 声线/分工约束也随当前性格走
+  // 全模式开思考:屏幕模式要真看懂再张口(关思考曾退化成"扫一眼瞎编");热点模式同时要满足
+  // 声线/报题/字数/防重复一堆约束,思考明显更稳(flash 便宜,用户拍板耗得起)。max_tokens 只管
+  // 正文,思考 token 另计——屏幕场正文预算给宽点防截断。
+  const GEN = { thinking: { type: 'enabled' }, max_tokens: mode === '屏幕' ? 2600 : 900 };
   const list = actions.slice(0, 40).join(',');
   const hotBlock = hot
     ? `\n【近期真实热搜/热点】(妹妹玩梗的主要来源,可挑最多1-2个自然融入;两场之间换着条目聊,别翻来覆去同一条;不合适就完全不用,永远以屏幕内容为主,严禁生硬报菜名)\n${hot}\n`
@@ -113,7 +120,7 @@ async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') 
   const styleBlock = style ? `\n【本场喜剧路线】${style}(贴合就多用,不贴合就丢掉,别硬演)\n` : '';
   const directive = mode === '热点'
     ? `\n只输出严格JSON {"lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐${cm.voice},妹妹${cs.voice},严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口。本场是【热搜脱口秀】:姐妹像解说搭档聊今天热搜里的1-2条最有梗的(可意见相左吵起来),妹妹${cs.hotRole}、姐姐${cm.hotRole},像真人聊八卦一样自然。**听众规则(最重要):主人没看过热搜,台词必须让他听懂在聊什么——第一句就要点名具体事件(如「BLG全球总决赛夺冠了」「北大399元羽绒服卖爆了」),禁止用「这个/那个/这事/那事」等空指代词**,text为不超过26个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`
-    : `\n只输出严格JSON {"lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐${cm.voice},妹妹${cs.voice},严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责${cs.hotRole}、姐姐负责${cm.hotRole},梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材。**听众规则:主人瞄一眼就能懂——名词要具体(说「报错弹窗」「十几条回复」,不说「这个」「那玩意」)**,text为不超过26个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`;
+    : `\n只输出严格JSON {"saw":"先用20-40字如实描述屏幕实际内容(什么窗口/在干什么/最显眼的东西;看不清的绝不编造,宁可写「小字看不清」)","lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐${cm.voice},妹妹${cs.voice},严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕【saw 里确认过的】屏幕内容拌嘴(吐槽/接梗/互怼),台词里说到的细节必须真的在屏幕上,妹妹负责${cs.hotRole}、姐姐负责${cm.hotRole},梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材。**听众规则:主人瞄一眼就能懂——名词要具体(说「报错弹窗」「十几条回复」,不说「这个」「那玩意」)**,text为不超过26个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`;
   const contentParts = [];
   if (b64) contentParts.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } });
   contentParts.push({ type: 'text', text: `${buildPersona()}${hotBlock}${recentBlock}${styleBlock}${directive}` });
@@ -145,8 +152,8 @@ async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') 
     let messages = baseMessages;
     for (let round = 0; round < 2; round += 1) {
       const d = await send({
-        model: MODEL, messages, max_tokens: 900, temperature: 1.0,
-        tools: [searchTool], tool_choice: 'auto', thinking: { type: 'disabled' },
+        model: MODEL, messages, max_tokens: GEN.max_tokens, temperature: 1.0,
+        tools: [searchTool], tool_choice: 'auto', thinking: GEN.thinking,
       });
       if (!d || d.error) break;
       const msg = d?.choices?.[0]?.message;
@@ -162,29 +169,29 @@ async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') 
         messages = [...messages, msg, { role: 'tool', tool_call_id: call.id, content: result || '(搜索暂无结果,用已有素材)' }];
         continue;
       }
-      const lines = tryParseLines(msg?.content || '');
-      if (lines) return lines;
+      const r = tryParseLines(msg?.content || '');
+      if (r) return r;
       break;
     }
   } catch (e) { /* 工具路失败退老路 */ }
 
-  // 兜底路:不带工具的旧矩阵(json_object × thinking)
+  // 兜底路:不带工具的旧矩阵(json_object × thinking)——思考开关沿用本模式的 GEN 设定
   for (const fmt of [{ type: 'json_object' }, null]) {
     const body = {
       model: MODEL,
       messages: baseMessages,
-      max_tokens: 900,
+      max_tokens: GEN.max_tokens,
       temperature: 1.0,
     };
     if (fmt) body.response_format = fmt;
-    for (const think of [{ type: 'disabled' }, null]) {
+    for (const think of [{ type: 'enabled' }, { type: 'disabled' }]) {
       const b = { ...body };
       if (think) b.thinking = think; else delete b.thinking;
       const d = await send(b);
       if (!d || d.error) continue;
       const raw = d?.choices?.[0]?.message?.content || '';
-      const lines = tryParseLines(raw);
-      if (lines) return lines;
+      const r = tryParseLines(raw);
+      if (r) return r;
     }
   }
   throw new Error('improvise failed');
@@ -262,12 +269,12 @@ async function tick(why) {
     const actions = await animPool().catch(() => []);
     const hot = await hotTopics().catch(() => '');
     const style = STYLES[Math.floor(Math.random() * STYLES.length)];
-    // 模式轮盘:A·看屏幕(截图+热梗佐料) / B·热搜专场(纯热点脱口秀)
-    const modeB = hot && Math.random() < HOT_MODE_RATIO;
+    // 模式轮盘:A·看屏幕(截图+热梗佐料) / B·热搜专场(纯热点脱口秀);ST_MODE 可钉死(屏幕|热点)
+    const modeB = process.env.ST_MODE ? (process.env.ST_MODE === '热点' && !!hot) : (hot && Math.random() < HOT_MODE_RATIO);
     const mode = modeB ? '热点' : '屏幕';
     const b64 = modeB ? null : screenshot();
-    const lines = await improvise(b64, actions, hot, loadRecentUsed(), style, mode);
-    console.log(`[${new Date().toLocaleTimeString()}] (${why}·${mode}) [路线:${style}] 姐妹同屏会:`);
+    const { saw, lines } = await improvise(b64, actions, hot, loadRecentUsed(), style, mode);
+    console.log(`[${new Date().toLocaleTimeString()}] (${why}·${mode}) [路线:${style}] 姐妹同屏会:${saw ? '\n  看到: ' + saw : ''}`);
     await playLines(lines, actions);
     recordUsed(lines);
   } catch (e) {
@@ -280,15 +287,16 @@ async function tick(why) {
 console.log(`[screen-talk] every ${INTERVAL}s, ${WINDOW} Beijing, days=${DAYS.join(',')}, CN-holidays excluded; model=${MODEL} key=${KEY ? 'set' : 'MISSING'}`);
 if (process.argv.includes('--gen')) {
   // 只生成不播出:走完整 tick 逻辑(模式轮盘+防重复+风格),但不锁宠不广播
+  // ST_MODE=屏幕|热点 可钉死模式(ST_MODE=屏幕 = 永远看屏幕,不聊热搜)
   if (await anySleeping()) { console.log('有人睡着,跳过'); process.exit(0); }
   const a = await animPool().catch(() => []);
   const hot = await hotTopics().catch(() => '');
   const style = STYLES[Math.floor(Math.random() * STYLES.length)];
-  const modeB = hot && Math.random() < HOT_MODE_RATIO;
+  const modeB = process.env.ST_MODE ? (process.env.ST_MODE === '热点' && !!hot) : (hot && Math.random() < HOT_MODE_RATIO);
   const mode = modeB ? '热点' : '屏幕';
   const b64 = modeB ? null : screenshot();
-  const lines = await improvise(b64, a, hot, loadRecentUsed(), style, mode);
-  console.log(`[模式:${mode}] [路线:${style}]`);
+  const { saw, lines } = await improvise(b64, a, hot, loadRecentUsed(), style, mode);
+  console.log(`[模式:${mode}] [路线:${style}]${saw ? ' 看到: ' + saw : ''}`);
   for (const l of lines) console.log(`${l.pet}: ${l.text} (${l.anim})`);
   recordUsed(lines);
   process.exit(0);

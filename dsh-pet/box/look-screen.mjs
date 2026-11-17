@@ -37,7 +37,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 分宠人设:谁触发看屏就用谁的口吻;互相认识,不说分身。
 // 性格段随右键「更多→性格」切换动态取(.personality.json,每次看屏现读,切换立即生效)。
-const LOOK_TAIL = '不要解释你是AI,不要emoji,不要每句都说"屏幕"。';
+const LOOK_TAIL = '看不清的内容绝不编造,宁可只聊能看清的。不要解释你是AI,不要emoji,不要每句都说"屏幕"。';
 const personaFor = (pet) => {
   const isSide = pet === 'maid-2';
   const p = current(isSide ? 'maid-2' : 'main') || { persona: '', styleTail: '' };
@@ -64,7 +64,9 @@ function screenshot() {
 }
 
 async function vision(b64, pet) {
-  for (const think of [{ type: 'disabled' }, null]) {
+  // 手动看屏开思考:先真看懂再开口(关思考=扫一眼凭直觉瞎编,小字看不清就开始幻觉);
+  // 思考路失败再退关闭路
+  for (const think of [{ type: 'enabled' }, { type: 'disabled' }]) {
     const body = {
       model: MODEL,
       messages: [{
@@ -74,7 +76,7 @@ async function vision(b64, pet) {
           { type: 'text', text: personaFor(pet) },
         ],
       }],
-      max_tokens: 900,
+      max_tokens: 1600,
       temperature: 0.9,
     };
     if (think) body.thinking = think;
