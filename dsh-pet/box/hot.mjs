@@ -1,9 +1,12 @@
 // hot.mjs — 近期热点抓取(60s API:微博/知乎热榜 + 每日新闻),文件缓存 45 分钟,失败退旧缓存
-// 供 screen-talk / pet-theater 注入提示词:模型由此获得"近半个月的梗",不靠硬编码
+// 供 screen-talk / pet-theater 注入提示词:模型由此获得"近半月的梗",不靠硬编码
+// 话题级轮换:同一份缓存池里,最近两场喂过的条目优先排除——否则模型每场都挑池子里
+// "最有梗"的那两三条,45 分钟缓存期内翻来覆去就那几个话题(用户实测吐槽过)。
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const CACHE_FILE = fileURLToPath(new URL('./.hot-cache.json', import.meta.url));
+const RECENT_FILE = fileURLToPath(new URL('./.hot-recent.json', import.meta.url));
 const TTL_MS = 45 * 60 * 1000;
 
 async function fetchJson(url) {
@@ -42,18 +45,39 @@ function sample(arr, n) {
   return a.slice(0, n);
 }
 
-/** 对「完整池文本」随机抽样成「本场素材」(各渠道抽样数) */
+/** 读/写「最近喂过的条目」(按渠道,滚动两场量;坏文件=没有轮换约束,不影响出料) */
+function loadRecent() {
+  try { return JSON.parse(readFileSync(RECENT_FILE, 'utf8')); } catch { return {}; }
+}
+function saveRecent(map) {
+  try { writeFileSync(RECENT_FILE, JSON.stringify(map)); } catch {}
+}
+
+/** 对「完整池文本」随机抽样成「本场素材」:各渠道抽样数 + 排除最近两场喂过的条目(不够再回填) */
 function sampleRows(poolText) {
   const TAKE = { '微博': 6, '知乎': 4, 'B站热搜': 5, 'B站热门': 4, '头条': 5, '抖音': 5, '贴吧': 4 };
+  const recent = loadRecent();
   const rows = poolText.split('\n').filter(Boolean);
   const out = rows.map((row) => {
     const sep = row.indexOf(': ');
     const head = sep >= 0 ? row.slice(0, sep) : '';
-    const items = (sep >= 0 ? row.slice(sep + 2) : row).split(' / ').filter(Boolean);
+    const items = [...new Set((sep >= 0 ? row.slice(sep + 2) : row).split(' / ').filter(Boolean))];
     const hit = Object.keys(TAKE).find((k) => head.includes(k));
     const take = hit ? TAKE[hit] : 5;
-    return head + ': ' + sample(items, Math.min(items.length, take)).join(' / ');
+    const used = new Set(Array.isArray(recent[head]) ? recent[head] : []);
+    let fresh = items.filter((x) => !used.has(x));
+    if (fresh.length < take) fresh = fresh.concat(items.filter((x) => used.has(x))); // 池子小就回填,宁重不空
+    const picked = sample(fresh, Math.min(fresh.length, take));
+    recent[head] = picked.slice(); // 记录本场所选;按渠道滚动截断
+    return head + ': ' + picked.join(' / ');
   });
+  // 滚动截断:每渠道只留最近两场(2×take)的量,过期自然放回可选池
+  for (const [head, arr] of Object.entries(recent)) {
+    const hit = Object.keys(TAKE).find((k) => head.includes(k));
+    const cap = 2 * (hit ? TAKE[hit] : 5);
+    if (Array.isArray(arr) && arr.length > cap) recent[head] = arr.slice(-cap);
+  }
+  saveRecent(recent);
   return out.join('\n');
 }
 

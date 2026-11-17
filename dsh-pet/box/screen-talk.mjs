@@ -104,7 +104,7 @@ async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') 
   const cm = current(MAIN), cs = current(SIDE); // 声线/分工约束也随当前性格走
   const list = actions.slice(0, 40).join(',');
   const hotBlock = hot
-    ? `\n【近期真实热搜/热点】(妹妹玩梗的主要来源,可挑最多1-2个自然融入;不合适就完全不用,永远以屏幕内容为主,严禁生硬报菜名)\n${hot}\n`
+    ? `\n【近期真实热搜/热点】(妹妹玩梗的主要来源,可挑最多1-2个自然融入;两场之间换着条目聊,别翻来覆去同一条;不合适就完全不用,永远以屏幕内容为主,严禁生硬报菜名)\n${hot}\n`
     : '';
   const recent = recentUsed || [];
   const recentBlock = recent.length
