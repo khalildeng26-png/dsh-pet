@@ -5,6 +5,7 @@
 //        node pet-theater.mjs --once    -> play one scene immediately
 import { readFileSync, openSync, closeSync, statSync, utimesSync } from 'node:fs';
 import { hotTopics } from './hot.mjs';
+import { memeSheet } from './memes.mjs';
 import { current } from './personalities.mjs';
 import { fileURLToPath as __ftp } from 'node:url';
 const __here = (p) => __ftp(new URL(p, import.meta.url));
@@ -87,10 +88,14 @@ async function improvise(actions) {
   const hotBlock = hot ? `\n【近期真实热搜】(妹妹玩梗的素材库,可挑1-2个自然融入,不合适就完全不用)\n${hot}\n` : '';
   const list = actions.slice(0, 40).join(',');
   const cm = current(MAIN), cs = current(SIDE); // 角色卡随右键「性格」切换动态取(.personality.json)
+  const memes = await memeSheet().catch(() => []);
+  const memeBlock = memes.length
+    ? `\n【近期网络热梗小抄】(妹妹玩梗优先挑这里的新鲜梗,别翻来覆去用老梗;用法要贴合语境,拿不准就换一个)\n${memes.map((m) => `- ${m.name}:${m.meaning}${m.usage ? `(例:${m.usage})` : ''}`).join('\n')}\n`
+    : '';
   const sys = `你是Q版鲸鱼女仆姐妹小剧场的导演,要写得有梗、好笑、像真人姐妹斗嘴。
 姐姐「蓝毛小女仆」(代称${MAIN}):${cm ? cm.card : ''}
 妹妹「小跟班」(代称${SIDE}):${cs ? cs.card : ''}
-两人是亲姐妹,互怼是爱的语言,台词里互称姐姐/妹妹。${hotBlock}
+两人是亲姐妹,互怼是爱的语言,台词里互称姐姐/妹妹。${hotBlock}${memeBlock}
 只输出严格JSON,格式 {"lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;声线匹配各自人设,严禁互换)","anim":"动作名","text":"台词"}]},恰好4行且两人交替出现,妹妹负责${cs ? cs.hotRole : '玩梗'}、姐姐负责${cm ? cm.hotRole : '毒舌吐槽'},text为不超过26个汉字的口语台词且不含引号,聊热点时第一句点名具体事件、禁止空指代词(主人没看过热搜也要听得懂),anim必须从: ${list} 中选,不要输出JSON以外的任何内容。`;
   for (const fmt of [{ type: 'json_object' }, null]) {
     const body = {

@@ -138,3 +138,15 @@ export async function hotTopics(opts = {}) {
   const stale = staleCache();
   return stale ? sampleRows(stale) : '';
 }
+
+/**
+ * 完整池文本(不抽样,原样全量):给梗提取等二次加工用。
+ * 缓存新鲜直接回;过期就复用 hotTopics 的抓取路径现抓一次,再把缓存原文读回来。
+ * @returns {Promise<string>}
+ */
+export async function rawPool() {
+  const cached = freshCache();
+  if (cached) return cached;
+  await hotTopics();
+  return freshCache() || staleCache() || '';
+}

@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync, openSync, closeSync, statSync, utimesSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hotTopics } from './hot.mjs';
+import { memeSheet } from './memes.mjs';
 import { current } from './personalities.mjs';
 import { fileURLToPath as __ftp } from 'node:url';
 const __here = (p) => __ftp(new URL(p, import.meta.url));
@@ -106,9 +107,16 @@ function tryParseLines(raw) {
 async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') {
   const cm = current(MAIN), cs = current(SIDE); // 声线/分工约束也随当前性格走
   // 全模式开思考:屏幕模式要真看懂再张口(关思考曾退化成"扫一眼瞎编");热点模式同时要满足
-  // 声线/报题/字数/防重复一堆约束,思考明显更稳(flash 便宜,用户拍板耗得起)。max_tokens 只管
-  // 正文,思考 token 另计——屏幕场正文预算给宽点防截断。
-  const GEN = { thinking: { type: 'enabled' }, max_tokens: mode === '屏幕' ? 2600 : 900 };
+  // 声线/报题/字数/防重复一堆约束,思考明显更稳(flash 便宜,用户拍板耗得起)。
+  // 坑:思考 token 计入 max_tokens(reasoning 能吃掉几千)——budget_tokens 限思考量,正文留保底。
+  const GEN = mode === '屏幕'
+    ? { thinking: { type: 'enabled', budget_tokens: 3000 }, max_tokens: 4500 }
+    : { thinking: { type: 'enabled', budget_tokens: 1500 }, max_tokens: 3000 };
+  // 梗学习层:刚从素材里提取的新鲜流行语(2h 一学)——妹妹玩梗优先用这里的,不准翻模型老本
+  const memes = await memeSheet().catch(() => []);
+  const memeBlock = memes.length
+    ? `\n【近期网络热梗小抄】(妹妹玩梗优先挑这里的新鲜梗,别翻来覆去用「家人们谁懂啊」这类老梗;用法要贴合语境,拿不准就换一个)\n${memes.map((m) => `- ${m.name}:${m.meaning}${m.usage ? `(例:${m.usage})` : ''}`).join('\n')}\n`
+    : '';
   const list = actions.slice(0, 40).join(',');
   const hotBlock = hot
     ? `\n【近期真实热搜/热点】(妹妹玩梗的主要来源,可挑最多1-2个自然融入;两场之间换着条目聊,别翻来覆去同一条;不合适就完全不用,永远以屏幕内容为主,严禁生硬报菜名)\n${hot}\n`
@@ -123,7 +131,7 @@ async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') 
     : `\n只输出严格JSON {"saw":"先用20-40字如实描述屏幕实际内容(什么窗口/在干什么/最显眼的东西;看不清的绝不编造,宁可写「小字看不清」)","lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐${cm.voice},妹妹${cs.voice},严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕【saw 里确认过的】屏幕内容拌嘴(吐槽/接梗/互怼),台词里说到的细节必须真的在屏幕上,妹妹负责${cs.hotRole}、姐姐负责${cm.hotRole},梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材。**听众规则:主人瞄一眼就能懂——名词要具体(说「报错弹窗」「十几条回复」,不说「这个」「那玩意」)**,text为不超过26个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`;
   const contentParts = [];
   if (b64) contentParts.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } });
-  contentParts.push({ type: 'text', text: `${buildPersona()}${hotBlock}${recentBlock}${styleBlock}${directive}` });
+  contentParts.push({ type: 'text', text: `${buildPersona()}${hotBlock}${memeBlock}${recentBlock}${styleBlock}${directive}` });
   const baseMessages = [{ role: 'user', content: contentParts }];
 
   async function send(body) {

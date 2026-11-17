@@ -66,7 +66,7 @@ function screenshot() {
 async function vision(b64, pet) {
   // 手动看屏开思考:先真看懂再开口(关思考=扫一眼凭直觉瞎编,小字看不清就开始幻觉);
   // 思考路失败再退关闭路
-  for (const think of [{ type: 'enabled' }, { type: 'disabled' }]) {
+  for (const think of [{ type: 'enabled', budget_tokens: 2500 }, { type: 'disabled' }]) {
     const body = {
       model: MODEL,
       messages: [{
@@ -76,7 +76,7 @@ async function vision(b64, pet) {
           { type: 'text', text: personaFor(pet) },
         ],
       }],
-      max_tokens: 1600,
+      max_tokens: 3500, // 思考 token 计入 max_tokens——budget 限思考,正文留保底(按实际用量计费)
       temperature: 0.9,
     };
     if (think) body.thinking = think;
