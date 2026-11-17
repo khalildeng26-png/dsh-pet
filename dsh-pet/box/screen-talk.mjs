@@ -8,11 +8,12 @@ import { readFileSync, writeFileSync, openSync, closeSync, statSync, utimesSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hotTopics } from './hot.mjs';
+import { current } from './personalities.mjs';
 import { fileURLToPath as __ftp } from 'node:url';
 const __here = (p) => __ftp(new URL(p, import.meta.url));
 
 // 单实例锁(路径可用 ST_LOCK_FILE 覆盖,供测试并行跑)
-const LOCK_FILE = process.env.ST_LOCK_FILE || 'D:/dsh/bin/.screen-talk.lock';
+const LOCK_FILE = process.env.ST_LOCK_FILE || __here('./.screen-talk.lock');
 try {
   if (Date.now() - statSync(LOCK_FILE).mtimeMs < 90000) { console.error('[screen-talk] already running, exit'); process.exit(0); }
 } catch {}
@@ -31,13 +32,17 @@ const DAYS = (process.env.ST_DAYS || '1,2,3,4,5').split(',').map(Number);
 const HOLIDAYS_FILE = process.env.ST_HOLIDAYS_FILE || __here('./holidays.json');
 const HOT_MODE_RATIO = Number(process.env.ST_HOT_RATIO ?? 0.5); // B·热搜专场出现概率(0=永远看屏幕,1=永远聊热点)
 
-const PERSONA = `你是Q版鲸鱼女仆姐妹(桌面宠物)的小剧场导演。写她们围绕主人屏幕的拌嘴,要有梗、好笑、像真人姐妹斗嘴。
+// 角色卡按当前性格动态拼(右键「更多→性格」可切,状态文件 .personality.json,每场现读):
+const buildPersona = () => {
+  const cm = current(MAIN), cs = current(SIDE);
+  return `你是Q版鲸鱼女仆姐妹(桌面宠物)的小剧场导演。写她们围绕主人屏幕的拌嘴,要有梗、好笑、像真人姐妹斗嘴。
 
-【角色卡·姐姐「蓝毛小女仆」】温柔贤惠的皮囊,毒舌傲娇的芯子。操心命:嘴上"真是的~主人又在作死",身体却诚实帮忙收拾烂摊子。会记账(主人欠她几次道歉记得门儿清),对妹妹是严师+慈母混合双打。玩梗慢半拍,爱一本正经地用过气的梗,被妹妹嘲"姐这梗都凉了"。口头禅:"真是的~"、"主人心里没点数吗"、"妹妹,坐好"。
+【角色卡·姐姐「蓝毛小女仆」】${cm.card}
 
-【角色卡·妹妹「小跟班」】网络冲浪十级学者,热梗第一手,家里唯一跟上时代的人。吃货,行动力全点在吃上,会为了一口零食出卖姐姐。爱抢镜头,撒娇逃避劳动成功率极高。口头禅:"家人们谁懂啊!"、"这波啊,这波是XX"、"姐姐听我说!"(急着分享新梗但常讲不明白)。
+【角色卡·妹妹「小跟班」】${cs.card}
 
 【关系动力学】亲姐妹,互怼是爱的语言,但绝不允许外人说对方半句。妹妹闯祸姐姐兜底,姐姐过时妹妹补课。屏幕中出现两只鲸鱼女仆就是她们本人(更大只=姐姐,更小只=妹妹),台词互称姐姐/妹妹,绝不说"分身/克隆"。主人是她们共同吐槽又共同关心的对象(吐槽他的代码/熬夜/折腾,但真出bug了会心疼)。`;
+};
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -96,6 +101,7 @@ function tryParseLines(raw) {
 }
 
 async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') {
+  const cm = current(MAIN), cs = current(SIDE); // 声线/分工约束也随当前性格走
   const list = actions.slice(0, 40).join(',');
   const hotBlock = hot
     ? `\n【近期真实热搜/热点】(妹妹玩梗的主要来源,可挑最多1-2个自然融入;不合适就完全不用,永远以屏幕内容为主,严禁生硬报菜名)\n${hot}\n`
@@ -106,11 +112,11 @@ async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') 
     : '';
   const styleBlock = style ? `\n【本场喜剧路线】${style}(贴合就多用,不贴合就丢掉,别硬演)\n` : '';
   const directive = mode === '热点'
-    ? `\n只输出严格JSON {"lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐毒舌冷静·真是的~,妹妹元气玩梗·家人们谁懂啊,严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口。本场是【热搜脱口秀】:姐妹像解说搭档聊今天热搜里的1-2条最有梗的(可意见相左吵起来),妹妹兴奋安利玩梗、姐姐毒舌点评泼冷水,像真人聊八卦一样自然。**听众规则(最重要):主人没看过热搜,台词必须让他听懂在聊什么——第一句就要点名具体事件(如「BLG全球总决赛夺冠了」「北大399元羽绒服卖爆了」),禁止用「这个/那个/这事/那事」等空指代词**,text为不超过26个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`
-    : `\n只输出严格JSON {"lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐毒舌冷静·真是的~,妹妹元气玩梗·家人们谁懂啊,严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责玩热梗、姐姐负责毒舌吐槽,梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材。**听众规则:主人瞄一眼就能懂——名词要具体(说「报错弹窗」「十几条回复」,不说「这个」「那玩意」)**,text为不超过26个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`;
+    ? `\n只输出严格JSON {"lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐${cm.voice},妹妹${cs.voice},严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口。本场是【热搜脱口秀】:姐妹像解说搭档聊今天热搜里的1-2条最有梗的(可意见相左吵起来),妹妹${cs.hotRole}、姐姐${cm.hotRole},像真人聊八卦一样自然。**听众规则(最重要):主人没看过热搜,台词必须让他听懂在聊什么——第一句就要点名具体事件(如「BLG全球总决赛夺冠了」「北大399元羽绒服卖爆了」),禁止用「这个/那个/这事/那事」等空指代词**,text为不超过26个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`
+    : `\n只输出严格JSON {"lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐${cm.voice},妹妹${cs.voice},严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕屏幕里实际看到的内容拌嘴(吐槽/接梗/互怼),妹妹负责${cs.hotRole}、姐姐负责${cm.hotRole},梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材。**听众规则:主人瞄一眼就能懂——名词要具体(说「报错弹窗」「十几条回复」,不说「这个」「那玩意」)**,text为不超过26个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`;
   const contentParts = [];
   if (b64) contentParts.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } });
-  contentParts.push({ type: 'text', text: `${PERSONA}${hotBlock}${recentBlock}${styleBlock}${directive}` });
+  contentParts.push({ type: 'text', text: `${buildPersona()}${hotBlock}${recentBlock}${styleBlock}${directive}` });
   const baseMessages = [{ role: 'user', content: contentParts }];
 
   async function send(body) {

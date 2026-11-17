@@ -234,7 +234,7 @@ function readApiKey(): string {
   }
 }
 
-/** [khalil] 拉起三个 box 服务；key 由调用方传入（未配置时不该被调用——见 boot 的 key 轮询）。 */
+/** [khalil] 拉起四个 box 服务；key 由调用方传入（未配置时不该被调用——见 boot 的 key 轮询）。 */
 function spawnBoxServices(origin: string, key: string): ChildProcess[] {
   const dir = boxDir();
   log(`box 目录判定：${dir || '（未找到，不拉起）'}；DSH_PET_BOX=${process.env.DSH_PET_BOX ?? '未设'}`);
@@ -248,9 +248,11 @@ function spawnBoxServices(origin: string, key: string): ChildProcess[] {
       ST_KEY: key,
       LOOK_KEY: key,
       TH_KEY: key,
+      // 性格切换守护不需要 LLM key,但要指准配置文件(它靠改写该文件软生效,不走会重启助手的 PUT /config)
+      PERS_CONFIG: join(dshHomeDir(), 'dsh-pet', 'main-config.jsonc'),
     };
     const children: ChildProcess[] = [];
-    for (const script of ['screen-talk.mjs', 'look-screen.mjs', 'pet-theater.mjs']) {
+    for (const script of ['screen-talk.mjs', 'look-screen.mjs', 'pet-theater.mjs', 'personality-menu.mjs']) {
       const child = spawn(process.execPath, [join(dir, script)], {
         env,
         stdio: ['ignore', 'ignore', 'pipe'],

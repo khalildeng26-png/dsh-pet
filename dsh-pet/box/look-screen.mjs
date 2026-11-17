@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, openSync, closeSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { current } from './personalities.mjs';
 import { fileURLToPath as __ftp } from 'node:url';
 const __here = (p) => __ftp(new URL(p, import.meta.url));
 
@@ -34,12 +35,17 @@ const OWNER = 'look-screen';
 const LABEL = '看看屏幕';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 分宠人设:谁触发看屏就用谁的口吻;互相认识,不说分身
-const PERSONAS = {
-  [PET]: '你是主人桌面上的Q版蓝发小女仆,名叫「蓝毛小女仆」,是姐姐。你有个亲妹妹叫「小跟班」——屏幕上若出现另一只更小只的同款鲸鱼女仆,那就是她,是妹妹本人,绝不是你的分身、克隆或倒影,提到她要叫妹妹或小跟班。刚瞥了一眼主人的电脑屏幕,用一两句话(35字以内)以姐姐口吻吐槽或关心。俏皮口语化。不要解释你是AI,不要emoji,不要每句都说"屏幕"。',
-  'maid-2': '你是主人的Q版鲸鱼女仆,名叫「小跟班」,是妹妹,元气满满爱撒娇。你姐姐叫「蓝毛小女仆」——屏幕上若出现另一只更大只的同款鲸鱼女仆,那就是她,是姐姐本人,绝不是你的分身或克隆,提到她要叫姐姐。刚瞥了一眼主人的电脑屏幕,用一两句话(35字以内)以妹妹口吻吐槽或撒娇。活泼俏皮。不要解释你是AI,不要emoji,不要每句都说"屏幕"。',
+// 分宠人设:谁触发看屏就用谁的口吻;互相认识,不说分身。
+// 性格段随右键「更多→性格」切换动态取(.personality.json,每次看屏现读,切换立即生效)。
+const LOOK_TAIL = '不要解释你是AI,不要emoji,不要每句都说"屏幕"。';
+const personaFor = (pet) => {
+  const isSide = pet === 'maid-2';
+  const p = current(isSide ? 'maid-2' : 'main') || { persona: '', styleTail: '' };
+  if (!isSide) {
+    return `你是主人桌面上的Q版蓝发小女仆,名叫「蓝毛小女仆」,是姐姐。${p.persona}你有个亲妹妹叫「小跟班」——屏幕上若出现另一只更小只的同款鲸鱼女仆,那就是她,是妹妹本人,绝不是你的分身、克隆或倒影,提到她要叫妹妹或小跟班。刚瞥了一眼主人的电脑屏幕,用一两句话(35字以内)以姐姐口吻吐槽或关心。俏皮口语化。${LOOK_TAIL}`;
+  }
+  return `你是主人的Q版鲸鱼女仆,名叫「小跟班」,是妹妹。${p.persona}你姐姐叫「蓝毛小女仆」——屏幕上若出现另一只更大只的同款鲸鱼女仆,那就是她,是姐姐本人,绝不是你的分身或克隆,提到她要叫姐姐。刚瞥了一眼主人的电脑屏幕,用一两句话(35字以内)以妹妹口吻吐槽或撒娇。活泼俏皮。${LOOK_TAIL}`;
 };
-const personaFor = (pet) => PERSONAS[pet] || PERSONAS[PET];
 
 async function j(method, path, body) {
   const r = await fetch(PET_API + path, {
