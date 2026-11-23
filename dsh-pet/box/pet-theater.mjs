@@ -7,6 +7,7 @@ import { readFileSync, openSync, closeSync, statSync, utimesSync } from 'node:fs
 import { hotTopics } from './hot.mjs';
 import { memeSheet } from './memes.mjs';
 import { current } from './personalities.mjs';
+import { logUsage } from './usage-log.mjs';
 import { fileURLToPath as __ftp } from 'node:url';
 const __here = (p) => __ftp(new URL(p, import.meta.url));
 
@@ -113,6 +114,7 @@ async function improvise(actions) {
       body: JSON.stringify(body),
     });
     const d = await r.json().catch(() => null);
+    logUsage('theater', d?.usage); // 每笔记账(screen-talk --usage 出报表)
     if (!d || d.error) { if (fmt) continue; throw new Error('api: ' + JSON.stringify(d).slice(0, 120)); }
     const raw = d?.choices?.[0]?.message?.content || '';
     const lines = tryParseLines(raw);

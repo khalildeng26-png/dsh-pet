@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { rawPool } from './hot.mjs';
+import { logUsage } from './usage-log.mjs';
 
 const MEME_FILE = fileURLToPath(new URL('./.meme-cache.json', import.meta.url));
 const TTL_MS = 2 * 60 * 60 * 1000; // 梗的保鲜期比热点长:2 小时一学
@@ -71,6 +72,7 @@ ${pool}`;
       signal: AbortSignal.timeout(45000),
     });
     const d = await r.json().catch(() => null);
+    logUsage('memes', d?.usage); // 每笔记账(screen-talk --usage 出报表)
     if (!d || d.error) { console.error('[memes] api error:', JSON.stringify(d).slice(0, 200)); return cached?.memes ?? []; }
     const msg = d?.choices?.[0]?.message;
     const memes = extractMemes(msg?.content || '');

@@ -9,6 +9,7 @@ import { readFileSync, openSync, closeSync, statSync, utimesSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { current } from './personalities.mjs';
+import { logUsage } from './usage-log.mjs';
 import { fileURLToPath as __ftp } from 'node:url';
 const __here = (p) => __ftp(new URL(p, import.meta.url));
 
@@ -86,6 +87,7 @@ async function vision(b64, pet) {
       body: JSON.stringify(body),
     });
     const d = await r.json().catch(() => null);
+    logUsage(`look-screen:${pet}`, d?.usage); // 每笔记账(screen-talk --usage 出报表)
     if (!d || d.error) { if (think) continue; throw new Error('api: ' + JSON.stringify(d).slice(0, 120)); }
     const m = d?.choices?.[0]?.message ?? {};
     const text = m.content || (Array.isArray(m.content) ? m.content.map(c => c.text || '').join('') : '');
@@ -126,6 +128,11 @@ async function handle(pet, why) {
   pet = pet || PET;
   if (await isSleeping(pet)) { console.log(`[look-screen] ${pet} sleeping, skip (${why})`); return; }
   try {
+    // 保险丝:宠物本体不在线时播不出去,直接跳过(不截图不调模型,零浪费)
+    try {
+      const r = await fetch(PET_API + '/config', { signal: AbortSignal.timeout(4000) });
+      if (!r.ok) throw new Error('http ' + r.status);
+    } catch { console.error('[look-screen] 宠物API不通,跳过(不烧钱)'); return; }
     const text = await vision(screenshot(), pet);
     await say(pet, text);
     console.log(`[${new Date().toLocaleTimeString()}] (${why}) ${pet}: ${text}`);

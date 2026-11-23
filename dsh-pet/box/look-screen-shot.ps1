@@ -1,8 +1,10 @@
-# look-screen-shot.ps1 - capture virtual screen, downscale to max edge 1280, save JPEG q82
+# look-screen-shot.ps1 - capture virtual screen, downscale to max edge 1600, save JPEG q82
+# 1600 (was 1280): chat text on 1080p screens was ~10px after downscale - vision misread numbers
+# (user's "3 yolks" became "5 yolks"); bigger capture = legible digits, modest token cost bump
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
 $w = $b.Width; $h = $b.Height
-$scale = [Math]::Min(1.0, 1280 / [Math]::Max($w, $h))
+$scale = [Math]::Min(1.0, 1600 / [Math]::Max($w, $h))
 $nw = [int]($w * $scale); $nh = [int]($h * $scale)
 $bmp = New-Object System.Drawing.Bitmap($w, $h)
 $g = [System.Drawing.Graphics]::FromImage($bmp)

@@ -9,9 +9,34 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hotTopics } from './hot.mjs';
 import { memeSheet } from './memes.mjs';
+import { logUsage } from './usage-log.mjs';
 import { current } from './personalities.mjs';
 import { fileURLToPath as __ftp } from 'node:url';
 const __here = (p) => __ftp(new URL(p, import.meta.url));
+
+// --usage 是纯读报表,必须在单实例锁之前处理(守护在跑时也要能查账)
+if (process.argv.includes('--usage')) {
+  let rows = [];
+  try {
+    rows = readFileSync(__here('./.llm-usage.jsonl'), 'utf8').trim().split('\n').filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  } catch {}
+  const byDay = new Map();
+  for (const r of rows) {
+    const day = r.ts.slice(0, 10);
+    const e = byDay.get(day) ?? { calls: 0, pt: 0, ct: 0, hit: 0 };
+    e.calls += 1; e.pt += r.pt || 0; e.ct += r.ct || 0; e.hit += r.hit || 0;
+    byDay.set(day, e);
+  }
+  console.log('日期         调用  输入tok   缓存命中  输出tok   约费¥(峰段)');
+  for (const [day, e] of [...byDay.entries()].sort()) {
+    const missIn = Math.max(0, e.pt - e.hit);
+    const cost = missIn * 2.13e-6 + e.ct * 8.5e-6; // 峰段粗估:输入miss ¥2.1/M,输出(含思考) ¥8.5/M
+    console.log(`${day}  ${String(e.calls).padStart(4)}  ${String(e.pt).padStart(8)}  ${String(e.hit).padStart(8)}  ${String(e.ct).padStart(8)}  ${cost.toFixed(2)}`);
+  }
+  if (!rows.length) console.log('(还没有记录)');
+  process.exit(0);
+}
 
 // 单实例锁(路径可用 ST_LOCK_FILE 覆盖,供测试并行跑)
 const LOCK_FILE = process.env.ST_LOCK_FILE || __here('./.screen-talk.lock');
@@ -25,7 +50,7 @@ const API = process.env.PET_API || 'http://127.0.0.1:3080/dsh-pet-7340';
 const BASE = process.env.ST_BASE || 'https://api.deepseek.com';
 const KEY = process.env.ST_KEY || '';
 const MODEL = process.env.ST_MODEL || 'deepseek-flash';
-const INTERVAL = Number(process.env.ST_INTERVAL ?? 120);
+const INTERVAL = Number(process.env.ST_INTERVAL ?? 300); // 2026-11-23 起 5 分钟一场(用户拍板:费用÷2.5)
 const MAIN = process.env.ST_MAIN || 'main';
 const SIDE = process.env.ST_SIDE || 'maid-2';
 const WINDOW = process.env.ST_WINDOW || '9:00-18:30';
@@ -106,12 +131,12 @@ function tryParseLines(raw) {
 
 async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') {
   const cm = current(MAIN), cs = current(SIDE); // 声线/分工约束也随当前性格走
-  // 全模式开思考:屏幕模式要真看懂再张口(关思考曾退化成"扫一眼瞎编");热点模式同时要满足
-  // 声线/报题/字数/防重复一堆约束,思考明显更稳(flash 便宜,用户拍板耗得起)。
-  // 坑:思考 token 计入 max_tokens(reasoning 能吃掉几千)——budget_tokens 限思考量,正文留保底。
+  // 思考策略(2026-11-23 用户拍板省钱档):屏幕场开思考(要真看懂,截图文本细节靠它);
+  // 热点场关思考(纯文本抖机灵,关了省下最贵的思考输出 token)。
+  // 坑:思考 token 计入 max_tokens(reasoning 能吃掉几千)——开思考的场额度必须给足。
   const GEN = mode === '屏幕'
     ? { thinking: { type: 'enabled', budget_tokens: 3000 }, max_tokens: 4500 }
-    : { thinking: { type: 'enabled', budget_tokens: 1500 }, max_tokens: 3000 };
+    : { thinking: { type: 'disabled' }, max_tokens: 900 };
   // 梗学习层:刚从素材里提取的新鲜流行语(2h 一学)——妹妹玩梗优先用这里的,不准翻模型老本
   const memes = await memeSheet().catch(() => []);
   const memeBlock = memes.length
@@ -128,7 +153,7 @@ async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') 
   const styleBlock = style ? `\n【本场喜剧路线】${style}(贴合就多用,不贴合就丢掉,别硬演)\n` : '';
   const directive = mode === '热点'
     ? `\n只输出严格JSON {"lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐${cm.voice},妹妹${cs.voice},严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口。本场是【热搜脱口秀】:姐妹像解说搭档聊今天热搜里的1-2条最有梗的(可意见相左吵起来),妹妹${cs.hotRole}、姐姐${cm.hotRole},像真人聊八卦一样自然。**听众规则(最重要):主人没看过热搜,台词必须让他听懂在聊什么——第一句就要点名具体事件(如「BLG全球总决赛夺冠了」「北大399元羽绒服卖爆了」),禁止用「这个/那个/这事/那事」等空指代词**,text为不超过26个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`
-    : `\n只输出严格JSON {"saw":"先用20-40字如实描述屏幕实际内容(什么窗口/在干什么/最显眼的东西;看不清的绝不编造,宁可写「小字看不清」)","lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐${cm.voice},妹妹${cs.voice},严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕【saw 里确认过的】屏幕内容拌嘴(吐槽/接梗/互怼),台词里说到的细节必须真的在屏幕上,妹妹负责${cs.hotRole}、姐姐负责${cm.hotRole},梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材。**听众规则:主人瞄一眼就能懂——名词要具体(说「报错弹窗」「十几条回复」,不说「这个」「那玩意」)**,text为不超过26个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`;
+    : `\n只输出严格JSON {"saw":"先用20-40字如实描述屏幕实际内容(什么窗口/在干什么/最显眼的东西;看不清的绝不编造,宁可写「小字看不清」)","lines":[{"pet":"姐姐"|"妹妹"(姐姐=蓝毛小女仆·大只,妹妹=小跟班·小只;台词声线必须匹配:姐姐${cm.voice},妹妹${cs.voice},严禁互换声线)","anim":"动作名","text":"台词"}]}:恰好3行、两人交替出现、都要开口,围绕【saw 里确认过的】屏幕内容拌嘴(吐槽/接梗/互怼),台词里说到的细节必须真的在屏幕上,妹妹负责${cs.hotRole}、姐姐负责${cm.hotRole},梗不够时姐妹日常(零食/道歉账/抢镜头/嫌弃主人)本身就是最好的素材。**数字纪律:聊天记录/文档里的数字、日期、人名必须逐字核对,小字看不清就用「几个」「一些」模糊表述,严禁编造或凑整具体数字(把3个说成5个这种)= 事故**。**听众规则:主人瞄一眼就能懂——名词要具体(说「报错弹窗」「十几条回复」,不说「这个」「那玩意」)**,text为不超过26个汉字的口语且不含引号,anim必须从: ${list} 中选。不要输出JSON以外的任何内容。`;
   const contentParts = [];
   if (b64) contentParts.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } });
   contentParts.push({ type: 'text', text: `${buildPersona()}${hotBlock}${memeBlock}${recentBlock}${styleBlock}${directive}` });
@@ -140,7 +165,9 @@ async function improvise(b64, actions, hot, recentUsed, style, mode = '屏幕') 
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${KEY}` },
       body: JSON.stringify(body),
     });
-    return r.json().catch(() => null);
+    const d = await r.json().catch(() => null);
+    logUsage(`screen-talk:${mode}`, d?.usage); // 每笔记账,--usage 出报表
+    return d;
   }
 
   // 优先路:给模型挂「联网搜索」工具——它自己决定要不要搜、搜什么(最多追加一轮)
@@ -269,11 +296,20 @@ function inWindow(now = new Date()) {
 }
 
 let running = false;
+// 保险丝(2026-11-23 事故教训):宠物本体(dsh web)不在线时,生成完也播不出去=纯烧钱。
+// 每场开场先探宠物 API,不通就整场跳过——零 LLM 调用,零浪费。
+async function petsAlive() {
+  try {
+    const r = await fetch(API + '/config', { signal: AbortSignal.timeout(4000) });
+    return r.ok;
+  } catch { return false; }
+}
 async function tick(why) {
   if (running) return;
   running = true;
   try {
     if (await anySleeping()) { console.log(`[${why}] 有人睡着,跳过`); return; }
+    if (!(await petsAlive())) { console.log(`[${why}] 宠物API不通,整场跳过(不烧钱)`); return; }
     const actions = await animPool().catch(() => []);
     const hot = await hotTopics().catch(() => '');
     const style = STYLES[Math.floor(Math.random() * STYLES.length)];
