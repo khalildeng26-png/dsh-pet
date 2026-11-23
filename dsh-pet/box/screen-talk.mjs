@@ -304,10 +304,58 @@ async function petsAlive() {
     return r.ok;
   } catch { return false; }
 }
+
+// —— 实时互动总开关(2026-11-23 用户需求:右键菜单切换,开=每5分钟一场,关=彻底安静零消耗) ——
+const AUTO_TALK_FILE = __here('./.auto-talk.json');
+function autoTalkOn() {
+  try { return JSON.parse(readFileSync(AUTO_TALK_FILE, 'utf8')).on !== false; } catch { return true; }
+}
+function setAutoTalk(on) {
+  try { writeFileSync(AUTO_TALK_FILE, JSON.stringify({ on })); } catch {}
+}
+const TOGGLE_OWNER = '实时互动';
+const toggleLabel = () => (autoTalkOn() ? '实时互动:开' : '实时互动:关');
+
+// 微锁弹一句确认(与 playLines 同姿势:只在写气泡的一瞬拿锁)
+async function say(pet, text) {
+  try {
+    const sf = await surfaceOf(pet);
+    const lk = await j('POST', `/lock?pet=${pet}&surface=${sf}`, {});
+    const id = lk?.lockId;
+    if (!id) return;
+    try {
+      await j('POST', `/broadcast?pet=${pet}&surface=${sf}&lock=${id}`, { text: String(text).slice(0, 40), seconds: 7, anim: false });
+    } finally {
+      await j('POST', `/lock/release?pet=${pet}`, { lockId: id }).catch(() => {});
+    }
+  } catch { /* 确认气泡失败不影响开关本身 */ }
+}
+
+// 开关的菜单面:常驻注册(关着也要能看见入口打开它),点击即切换
+async function toggleMenuLoop() {
+  for (;;) {
+    try {
+      await j('POST', '/menu/item', { owner: TOGGLE_OWNER, labels: [toggleLabel()], target: 'both' });
+      const ev = await j('GET', `/menu/events?owner=${encodeURIComponent(TOGGLE_OWNER)}&wait=25000`);
+      for (const [label, pet] of Object.entries(ev?.events ?? {})) {
+        if (!pet || typeof pet !== 'string') continue; // 未点击项值为 null,必须过滤(11-17 血泪)
+        const turnOn = !autoTalkOn();
+        setAutoTalk(turnOn);
+        console.log(`[screen-talk] 实时互动 → ${turnOn ? '开' : '关'} (点击自 ${pet})`);
+        await say(pet, turnOn ? '同屏会已开,每5分钟一场~' : '同屏会关咯,想我们了随时点开~');
+      }
+    } catch (e) {
+      console.error('[screen-talk] toggle menu loop:', e.message, '- retry 5s');
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
+}
+
 async function tick(why) {
   if (running) return;
   running = true;
   try {
+    if (!autoTalkOn()) return; // 总开关关着:整场跳过(菜单标签即状态,不再刷日志)
     if (await anySleeping()) { console.log(`[${why}] 有人睡着,跳过`); return; }
     if (!(await petsAlive())) { console.log(`[${why}] 宠物API不通,整场跳过(不烧钱)`); return; }
     const actions = await animPool().catch(() => []);
@@ -349,8 +397,11 @@ if (process.argv.includes('--once')) {
   await tick('once');
   process.exit(0);
 }
-for (;;) {
-  await sleep(INTERVAL * 1000);
-  if (!inWindow()) continue;
-  await tick('auto');
+async function autoLoop() {
+  for (;;) {
+    await sleep(INTERVAL * 1000);
+    if (!inWindow()) continue;
+    await tick('auto');
+  }
 }
+await Promise.all([toggleMenuLoop(), autoLoop()]);
