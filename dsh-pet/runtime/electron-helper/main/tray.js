@@ -8,6 +8,7 @@
  */
 
 const path = require('node:path');
+const { khalilFullStop } = require('./khalil-quit.js');
 
 /**
  * 造托盘能力。
@@ -68,21 +69,36 @@ function createTray({
   }
 
   /**
-   * 托盘「退出」是否该出现。
-   *
-   * 独立应用与手动 start-desktop 流可以自己 app.quit()；isBridge 下本进程由宿主拉起，
-   * 自己退会被当成崩溃按退避重启，必须先问宿主（GET /quit 的 canQuit）。
-   * @returns 可以自己退出时为 true；探测失败按不支持处理，菜单项因此不出现。
+   * 托盘「退出」。三种形态：
+   * - 独立应用 / 手动 start-desktop：自己 app.quit() 即可（box 子进程随 will-quit 收尾）。
+   * - 桥接且宿主支持代劳（POST /quit）：交给宿主执行「停 Helper + 关服务 + 退出」。
+   * - [khalil] 桥接且宿主拒绝（DSH 形态 canQuit:false）：走本 fork 的完整关停
+   *   （杀 sidecar → 停宿主 → 停看门狗 → 禁自启 → 自退），等价于「宠物退出.cmd」。
    */
-  async function canQuitSelf() {
-    if (appMode || !isBridge) return true;
-    try {
-      return JSON.parse((await hostRequest('GET', petRoute + '/quit')).body || '{}').canQuit === true;
-    } catch (e) {
-      console.error('[dsh-pet-desktop-helper] quit capability probe failed:', String(e && e.message ? e.message : e));
-      return false;
+  const quitApp = () => {
+    if (!isBridge || appMode) {
+      app.quit();
+      return;
     }
-  }
+    hostRequest('GET', petRoute + '/quit')
+      .then((resp) => {
+        let canQuit = false;
+        try {
+          canQuit = JSON.parse(resp.body || '{}').canQuit === true;
+        } catch (e) {
+          canQuit = false;
+        }
+        if (canQuit) {
+          // 交给宿主停机：它会先停本进程再退，这条请求不用等结果
+          hostRequest('POST', petRoute + '/quit').catch((e) => {
+            console.error('[dsh-pet-desktop-helper] tray quit failed:', String(e && e.message ? e.message : e));
+          });
+        } else {
+          khalilFullStop({ app, log: console.error });
+        }
+      })
+      .catch(() => khalilFullStop({ app, log: console.error }));
+  };
 
   /**
    * 按当前配置拼托盘菜单；返回 null 表示此时不该有托盘（开关关掉 / 配置里没有宠物）。
@@ -107,17 +123,6 @@ function createTray({
       }))
       .filter((pet) => pet.id);
     if (!pets.length) return null; // 配置里没有任何宠物：没有可切换的对象，不建托盘
-    const canQuit = await canQuitSelf();
-    const quitApp = () => {
-      if (!isBridge || appMode) {
-        app.quit();
-        return;
-      }
-      // 交给宿主停机：它会先停本进程再退，所以这条请求不用等结果
-      hostRequest('POST', petRoute + '/quit').catch((e) => {
-        console.error('[dsh-pet-desktop-helper] tray quit failed:', String(e && e.message ? e.message : e));
-      });
-    };
     return Menu.buildFromTemplate([
       ...pets.map((pet) => ({
         label: pet.name || pet.id,
@@ -126,7 +131,9 @@ function createTray({
         click: () => traySetPetDisplay(pet.id, toggleDisplay(pet.display)),
       })),
       ...(openChat ? [{ type: 'separator' }, { label: '聊天窗口', click: () => openChat() }] : []),
-      ...(canQuit ? [{ type: 'separator' }, { label: '退出', click: quitApp }] : []),
+      // [khalil] 退出无条件显示：桥接形态宿主拒绝代劳时走 fork 自己的完整关停(见 quitApp)
+      { type: 'separator' },
+      { label: '退出', click: quitApp },
     ]);
   }
 
